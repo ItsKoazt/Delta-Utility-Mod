@@ -6,6 +6,7 @@ import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.components.AbstractSliderButton;
 import net.minecraft.client.gui.components.Button;
+import net.minecraft.client.gui.components.EditBox;
 import net.minecraft.client.gui.components.Tooltip;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.network.chat.Component;
@@ -19,8 +20,8 @@ public final class DeltaUtilityModMenu implements ModMenuApi {
     private static final class DeltaUtilityModConfigScreen extends Screen {
         private static final int COLUMN_WIDTH = 150;
         private static final int ROW_HEIGHT = 20;
-        private static final int ROW_GAP = 24;
-        private static final int SECTION_GAP = 28;
+        private static final int ROW_GAP = 22;
+        private static final int SECTION_GAP = 26;
 
         private static final int COLOR_TITLE = 0xFFFFFFFF;
         private static final int COLOR_HEADER = 0xFFFFCF5A;
@@ -36,6 +37,9 @@ public final class DeltaUtilityModMenu implements ModMenuApi {
         private boolean lavaSafety;
         private boolean autoTorch;
         private boolean hud;
+        private boolean sweep;
+        private String colorHex;
+        private EditBox colorBox;
         private int pauseHealth;
         private int hunger;
         private int miningRange;
@@ -50,6 +54,7 @@ public final class DeltaUtilityModMenu implements ModMenuApi {
         private int automationHeaderY;
         private int miningHeaderY;
         private int safetyHeaderY;
+        private int colorLabelY;
 
         private DeltaUtilityModConfigScreen(Screen parent) {
             super(Component.literal("Delta Utility Mod"));
@@ -65,6 +70,8 @@ public final class DeltaUtilityModMenu implements ModMenuApi {
             lavaSafety = DeltaUtilityModClient.isLavaSafetyEnabled();
             autoTorch = DeltaUtilityModClient.isAutoTorchEnabled();
             hud = DeltaUtilityModClient.isHudEnabled();
+            sweep = DeltaUtilityModClient.isDropSweepEnabled();
+            colorHex = DeltaUtilityModClient.getOutlineColorHex();
             pauseHealth = DeltaUtilityModClient.getPauseHealth();
             hunger = DeltaUtilityModClient.getHungerThreshold();
             miningRange = DeltaUtilityModClient.getMiningRange();
@@ -78,7 +85,7 @@ public final class DeltaUtilityModMenu implements ModMenuApi {
             int center = this.width / 2;
             leftX = center - COLUMN_WIDTH - 5;
             rightX = center + 5;
-            contentTop = Math.max(20, this.height / 2 - 124);
+            contentTop = Math.max(14, this.height / 2 - 126);
 
             int y = contentTop;
 
@@ -101,9 +108,9 @@ public final class DeltaUtilityModMenu implements ModMenuApi {
             addToggle(leftX, y, "Auto Torch", autoTorch,
                     "Places torches from your inventory while mining when light gets low.",
                     value -> autoTorch = value);
-            addToggle(rightX, y, "Status HUD", hud,
-                    "Shows job progress above the hotbar while a task runs.",
-                    value -> hud = value);
+            addToggle(rightX, y, "Drop Sweep", sweep,
+                    "Collects leftover item drops in the area before finishing a mining job.",
+                    value -> sweep = value);
             y += SECTION_GAP;
 
             miningHeaderY = y;
@@ -133,8 +140,19 @@ public final class DeltaUtilityModMenu implements ModMenuApi {
                     value -> pauseHealth = value);
             y += ROW_GAP;
             addToggle(leftX, y, "Selection Outline", outline,
-                    "Shows particle edges around the /pos1 - /pos2 selection box.",
+                    "Shows colored edges around the /pos1 - /pos2 selection box.",
                     value -> outline = value);
+            addToggle(rightX, y, "Status HUD", hud,
+                    "Shows job progress above the hotbar while a task runs.",
+                    value -> hud = value);
+            y += ROW_GAP;
+
+            colorLabelY = y + 6;
+            colorBox = new EditBox(this.font, rightX, y, COLUMN_WIDTH, ROW_HEIGHT, Component.literal("Outline Color"));
+            colorBox.setMaxLength(7);
+            colorBox.setValue(colorHex);
+            colorBox.setTooltip(Tooltip.create(Component.literal("Outline color as a hex code, e.g. #3DE1FF or FF0044.")));
+            addRenderableWidget(colorBox);
             y += ROW_GAP + 6;
 
             addRenderableWidget(Button.builder(Component.literal("Save & Close"), button -> {
@@ -156,6 +174,8 @@ public final class DeltaUtilityModMenu implements ModMenuApi {
                         lavaSafety = true;
                         autoTorch = false;
                         hud = true;
+                        sweep = true;
+                        colorHex = "#3DE1FF";
                         pauseHealth = 6;
                         hunger = 14;
                         miningRange = 5;
@@ -201,6 +221,7 @@ public final class DeltaUtilityModMenu implements ModMenuApi {
             drawSectionHeader(extractor, "Automation", automationHeaderY);
             drawSectionHeader(extractor, "Mining", miningHeaderY);
             drawSectionHeader(extractor, "Safety & Display", safetyHeaderY);
+            extractor.text(this.font, "Outline Color (hex)", leftX, colorLabelY, 0xFFC8C8C8);
 
             extractor.centeredText(this.font, Component.literal("Delta Utility Mod v" + modVersion()),
                     this.width / 2, this.height - 12, COLOR_FOOTER);
@@ -226,6 +247,10 @@ public final class DeltaUtilityModMenu implements ModMenuApi {
             DeltaUtilityModClient.setLavaSafetyEnabled(lavaSafety);
             DeltaUtilityModClient.setAutoTorchEnabled(autoTorch);
             DeltaUtilityModClient.setHudEnabled(hud);
+            DeltaUtilityModClient.setDropSweepEnabled(sweep);
+            if (colorBox != null) {
+                DeltaUtilityModClient.setOutlineColorHex(colorBox.getValue());
+            }
             DeltaUtilityModClient.setPauseHealth(pauseHealth);
             DeltaUtilityModClient.setHungerThreshold(hunger);
             DeltaUtilityModClient.setMiningRange(miningRange);

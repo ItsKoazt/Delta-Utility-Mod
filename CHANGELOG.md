@@ -11,8 +11,16 @@ New Features
 * Added AutoFill replace mode: `/autofill start <block> replace` also mines out existing blocks, turning fill into a full "set this area to X" operation. Normal fill still never touches solid blocks.
 * Added falling block awareness: the bot sidesteps when gravel or sand hangs unsupported above its head, and pathfinding avoids standing under floating gravel.
 
+Camera and Outline
+
+* The mod no longer takes over your camera while breaking or placing blocks. It only steers the view while actually walking, since mining and placing never needed it. Watching something else while it works is now comfortable.
+* The selection outline is now a dense, near-solid colored line (still particles, drawn with steady dust instead of drifting sparkles).
+* The outline color is configurable with hex codes: `/delta outline color 3DE1FF` or the new Outline Color field in the config screen. Default is a Delta cyan.
+
 Fixes and Improvements
 
+* The drop sweep now gives up on drops it can't get closer to (in holes, on ledges) and moves to the next one instead of getting stuck.
+* The drop sweep is now toggleable with `/automine sweep <true|false>` or the Drop Sweep option in the config screen (on by default).
 * Release builds now derive the mod version from the git tag, so the jar version can never drift from the published version.
 * Path clearing now ignores the block filter, so filtered-out blocks can still be tunneled through to reach targets.
 * The AutoMine start message now notes when a block filter is active.

@@ -4,7 +4,8 @@ Client-side Fabric utility mod for Minecraft 26.2: select an area, then let the 
 
 ## Features
 
-- **Area selection** with `/pos1` and `/pos2` (look at a block and run the command), with a particle outline of the selected box and live size feedback.
+- **Area selection** with `/pos1` and `/pos2` (look at a block and run the command), with a solid-looking colored outline of the selected box (hex-configurable color) and live size feedback.
+- **Hands-off camera** — the mod only steers your view while walking; breaking and placing leave the camera alone.
 - **AutoMine** — mines every block in the selection, top-down, preferring nearby and exposed blocks and saving the block under your feet for last.
 - **AutoFill** — fills the selection with a chosen block, bottom-up and farthest-first so it never seals you into a corner, and never places a block inside you. Fills straight through water, lava, tall grass, and snow, and breaks soft obstructions (flowers, saplings, torches) that occupy a fill spot.
 - **A\* pathfinding** — the bot walks real paths to out-of-reach blocks: it routes around terrain, takes diagonals, steps up, drops safely (max 3 blocks), and tunnels through blocks only when needed (cheaply inside the selection, reluctantly outside). Falls back to direct walking if no path is found.
@@ -53,7 +54,9 @@ Client-side Fabric utility mod for Minecraft 26.2: select an area, then let the 
 | `/autofill start <block>` | Fill the selection (e.g. `dirt` or `minecraft:dirt`) |
 | `/autofill start <block> replace` | Fill and also mine out existing blocks |
 | `/autofill pause` / `resume` / `stop` / `reset` / `status` | Control AutoFill |
-| `/delta outline on` / `off` | Toggle the selection outline particles |
+| `/delta outline on` / `off` | Toggle the selection outline |
+| `/delta outline color <hex>` | Outline color, e.g. `3DE1FF` |
+| `/automine sweep <true\|false>` | Drop collection sweep (default on) |
 | `/delta help` | Command summary in chat |
 
 ## Building

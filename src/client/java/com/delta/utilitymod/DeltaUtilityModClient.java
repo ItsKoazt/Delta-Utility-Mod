@@ -15,7 +15,7 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.core.component.DataComponents;
-import net.minecraft.core.particles.ParticleTypes;
+import net.minecraft.core.particles.DustParticleOptions;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.Identifier;
@@ -101,6 +101,12 @@ public class DeltaUtilityModClient implements ClientModInitializer {
     // Torch placement
     private static int torchCooldown = 0;
 
+    // Drop sweep progress tracking (skips unreachable drops)
+    private static int sweepTargetId = -1;
+    private static int sweepNoProgressTicks = 0;
+    private static double sweepBestDistance = Double.MAX_VALUE;
+    private static final Set<Integer> sweepSkippedDrops = new HashSet<>();
+
     // Settings (persisted)
     private static boolean selectionOutlineEnabled = true;
     private static boolean autoMove = true;
@@ -115,6 +121,9 @@ public class DeltaUtilityModClient implements ClientModInitializer {
     private static int pauseHealth = 6; // health points out of 20; 0 disables
     private static boolean autoTorch = false;
     private static boolean hudEnabled = true;
+    private static boolean dropSweep = true;
+    private static String outlineColorHex = "#3DE1FF";
+    private static int outlineColorRgb = 0x3DE1FF;
 
     // Safety state
     private static boolean lowHealthTriggered = false;
@@ -202,12 +211,13 @@ public class DeltaUtilityModClient implements ClientModInitializer {
                                 "§f/pos1§7, §f/pos2 §7- select the area you are looking at",
                                 "§f/automine start|pause|resume|stop|reset|status",
                                 "§f/automine range|moverange|delay|hunger|health|mindurability <n>",
-                                "§f/automine move|tools|eat|lavasafety|torch|hud <true|false>",
+                                "§f/automine move|tools|eat|lavasafety|torch|hud|sweep <true|false>",
                                 "§f/automine chest §7- deposit inventory into the chest you're looking at",
                                 "§f/automine filter add|remove|list|clear|mode §7- choose which blocks to mine",
                                 "§7Keybinds (see Controls): set pos1/pos2, start/pause, stop",
                                 "§f/autofill start <block> [replace]§7, §fpause|resume|stop|reset|status",
-                                "§f/delta outline on|off §7- selection outline particles")));
+                                "§f/delta outline on|off §7- selection outline",
+                                "§f/delta outline color <hex> §7- outline color, e.g. 3DE1FF")));
                         return 1;
                     }))
                     .then(ClientCommands.literal("outline")
@@ -220,7 +230,17 @@ public class DeltaUtilityModClient implements ClientModInitializer {
                                 setSelectionOutlineEnabled(false);
                                 context.getSource().sendFeedback(Component.literal("§cSelection outline disabled."));
                                 return 1;
-                            }))));
+                            }))
+                            .then(ClientCommands.literal("color")
+                                    .then(ClientCommands.argument("hex", StringArgumentType.word()).executes(context -> {
+                                        String hex = StringArgumentType.getString(context, "hex");
+                                        if (!setOutlineColorHex(hex)) {
+                                            context.getSource().sendFeedback(Component.literal("§cInvalid color. Use a 6-digit hex code, e.g. §f3DE1FF §cor §fFF0044§c."));
+                                            return 0;
+                                        }
+                                        context.getSource().sendFeedback(Component.literal("§aOutline color set to §f" + outlineColorHex));
+                                        return 1;
+                                    })))));
 
             dispatcher.register(ClientCommands.literal("autofill")
                     .then(ClientCommands.literal("start")
@@ -358,6 +378,12 @@ public class DeltaUtilityModClient implements ClientModInitializer {
                             .then(ClientCommands.argument("enabled", BoolArgumentType.bool()).executes(context -> {
                                 setHudEnabled(BoolArgumentType.getBool(context, "enabled"));
                                 context.getSource().sendFeedback(Component.literal("§aStatus HUD set to §f" + hudEnabled));
+                                return 1;
+                            })))
+                    .then(ClientCommands.literal("sweep")
+                            .then(ClientCommands.argument("enabled", BoolArgumentType.bool()).executes(context -> {
+                                setDropSweepEnabled(BoolArgumentType.getBool(context, "enabled"));
+                                context.getSource().sendFeedback(Component.literal("§aDrop collection sweep set to §f" + dropSweep));
                                 return 1;
                             })))
                     .then(ClientCommands.literal("chest")
@@ -772,9 +798,13 @@ public class DeltaUtilityModClient implements ClientModInitializer {
                 selectNewMineTarget(client);
             }
             if (currentTarget == null) {
-                if (findNearestDrop(client) != null) {
+                if (dropSweep && findNearestDrop(client) != null) {
                     minePhase = MinePhase.SWEEP;
                     phaseTicks = 0;
+                    sweepTargetId = -1;
+                    sweepNoProgressTicks = 0;
+                    sweepBestDistance = Double.MAX_VALUE;
+                    sweepSkippedDrops.clear();
                     resetPath();
                     client.player.sendSystemMessage(Component.literal("§bAutoMine: area cleared, collecting drops..."));
                     return;
@@ -807,10 +837,10 @@ public class DeltaUtilityModClient implements ClientModInitializer {
             return;
         }
 
+        // In range: mining doesn't need camera control, so leave the view alone.
         releaseMovementKeys(client);
         stuckTicks = 0;
         resetPath();
-        faceSmooth(client, centerOf(currentTarget), 60.0F);
 
         if (autoTools && !switchToBestTool(client, currentTarget)) {
             stopJob();
@@ -906,7 +936,6 @@ public class DeltaUtilityModClient implements ClientModInitializer {
 
         releaseMovementKeys(client);
         resetPath();
-        faceSmooth(client, centerOf(depositChest), 60.0F);
 
         if (client.player.containerMenu.containerId == 0) {
             if (phaseTicks % 10 == 1) {
@@ -985,7 +1014,7 @@ public class DeltaUtilityModClient implements ClientModInitializer {
     private static void tickSweep(Minecraft client) {
         phaseTicks++;
 
-        if (phaseTicks > 600) {
+        if (phaseTicks > 600 || !autoMove) {
             finishMineJob(client);
             return;
         }
@@ -994,8 +1023,25 @@ public class DeltaUtilityModClient implements ClientModInitializer {
             finishMineJob(client);
             return;
         }
-        if (!autoMove) {
-            finishMineJob(client);
+
+        // Track approach progress per drop; give up on drops we can't get closer to
+        // (stuck in a hole, on a ledge, behind something) instead of grinding on them.
+        if (drop.getId() != sweepTargetId) {
+            sweepTargetId = drop.getId();
+            sweepNoProgressTicks = 0;
+            sweepBestDistance = Double.MAX_VALUE;
+        }
+        double distance = drop.position().distanceTo(client.player.position());
+        if (distance < sweepBestDistance - 0.05D) {
+            sweepBestDistance = distance;
+            sweepNoProgressTicks = 0;
+        } else {
+            sweepNoProgressTicks++;
+        }
+        if (sweepNoProgressTicks > 80) {
+            sweepSkippedDrops.add(drop.getId());
+            sweepTargetId = -1;
+            resetPath();
             return;
         }
 
@@ -1021,7 +1067,7 @@ public class DeltaUtilityModClient implements ClientModInitializer {
             if (!(entity instanceof ItemEntity item) || item.getItem().isEmpty()) {
                 continue;
             }
-            if (!bounds.contains(item.position())) {
+            if (sweepSkippedDrops.contains(item.getId()) || !bounds.contains(item.position())) {
                 continue;
             }
             double distance = item.position().distanceToSqr(client.player.position());
@@ -1211,7 +1257,6 @@ public class DeltaUtilityModClient implements ClientModInitializer {
         if (clearBlock != null) {
             if (withinRange(client, clearBlock, maxRange)) {
                 releaseMovementKeys(client);
-                faceSmooth(client, centerOf(clearBlock), 60.0F);
                 if (autoTools) {
                     switchToBestTool(client, clearBlock);
                 }
@@ -1667,10 +1712,10 @@ public class DeltaUtilityModClient implements ClientModInitializer {
             return;
         }
 
+        // In range: placing uses a synthetic hit result, no camera control needed.
         releaseMovementKeys(client);
         stuckTicks = 0;
         resetPath();
-        faceSmooth(client, centerOf(currentTarget), 60.0F);
 
         // An obstruction sits where the block goes: break it first, then place
         // on a later tick. In replace mode this can be any solid block, so use
@@ -2176,15 +2221,15 @@ public class DeltaUtilityModClient implements ClientModInitializer {
     private static double calculateOutlineStep(int sizeX, int sizeY, int sizeZ) {
         int largest = Math.max(sizeX, Math.max(sizeY, sizeZ));
         if (largest > 96) {
-            return 6.0D;
+            return 3.0D;
         }
         if (largest > 64) {
-            return 4.0D;
+            return 1.5D;
         }
         if (largest > 32) {
-            return 2.0D;
+            return 0.75D;
         }
-        return 1.0D;
+        return 0.4D;
     }
 
     private static void drawParticleLine(Minecraft client, double x1, double y1, double z1, double x2, double y2, double z2, double step) {
@@ -2194,9 +2239,12 @@ public class DeltaUtilityModClient implements ClientModInitializer {
         double distance = Math.sqrt(dx * dx + dy * dy + dz * dz);
         int points = Math.max(1, (int) Math.ceil(distance / Math.max(0.25D, step)));
 
+        // Dust particles hold still and take any RGB color, so a tight spacing
+        // reads as a near-solid line in the configured color.
+        DustParticleOptions dust = new DustParticleOptions(outlineColorRgb, 1.0F);
         for (int i = 0; i <= points; i++) {
             double t = i / (double) points;
-            client.level.addParticle(ParticleTypes.END_ROD, x1 + dx * t, y1 + dy * t, z1 + dz * t, 0.0D, 0.0D, 0.0D);
+            client.level.addParticle(dust, x1 + dx * t, y1 + dy * t, z1 + dz * t, 0.0D, 0.0D, 0.0D);
         }
     }
 
@@ -2333,6 +2381,49 @@ public class DeltaUtilityModClient implements ClientModInitializer {
         saveSettings();
     }
 
+    public static boolean isDropSweepEnabled() {
+        return dropSweep;
+    }
+
+    public static void setDropSweepEnabled(boolean enabled) {
+        dropSweep = enabled;
+        saveSettings();
+    }
+
+    public static String getOutlineColorHex() {
+        return outlineColorHex;
+    }
+
+    /** Accepts "RRGGBB" or "#RRGGBB"; returns false (keeping the old color) if invalid. */
+    public static boolean setOutlineColorHex(String hex) {
+        Integer parsed = parseHexColor(hex);
+        if (parsed == null) {
+            return false;
+        }
+        outlineColorRgb = parsed;
+        outlineColorHex = "#" + String.format("%06X", parsed);
+        saveSettings();
+        return true;
+    }
+
+    private static Integer parseHexColor(String hex) {
+        if (hex == null) {
+            return null;
+        }
+        String cleaned = hex.trim();
+        if (cleaned.startsWith("#")) {
+            cleaned = cleaned.substring(1);
+        }
+        if (cleaned.length() != 6) {
+            return null;
+        }
+        try {
+            return Integer.parseInt(cleaned, 16);
+        } catch (NumberFormatException ignored) {
+            return null;
+        }
+    }
+
     // ------------------------------------------------------------------
     // Settings persistence
     // ------------------------------------------------------------------
@@ -2359,6 +2450,12 @@ public class DeltaUtilityModClient implements ClientModInitializer {
             pauseHealth = readInt(properties, "pauseHealth", pauseHealth, 0, 19);
             autoTorch = readBoolean(properties, "autoTorch", autoTorch);
             hudEnabled = readBoolean(properties, "hudEnabled", hudEnabled);
+            dropSweep = readBoolean(properties, "dropSweep", dropSweep);
+            Integer color = parseHexColor(properties.getProperty("outlineColor", outlineColorHex));
+            if (color != null) {
+                outlineColorRgb = color;
+                outlineColorHex = "#" + String.format("%06X", color);
+            }
         } catch (Exception e) {
             LOGGER.warn("Failed to load Delta Utilities settings, rewriting defaults", e);
             saveSettings();
@@ -2382,6 +2479,8 @@ public class DeltaUtilityModClient implements ClientModInitializer {
             properties.setProperty("pauseHealth", Integer.toString(pauseHealth));
             properties.setProperty("autoTorch", Boolean.toString(autoTorch));
             properties.setProperty("hudEnabled", Boolean.toString(hudEnabled));
+            properties.setProperty("dropSweep", Boolean.toString(dropSweep));
+            properties.setProperty("outlineColor", outlineColorHex);
             try (OutputStream output = Files.newOutputStream(CONFIG_PATH)) {
                 properties.store(output, "Delta Utilities settings");
             }
@@ -2529,6 +2628,10 @@ public class DeltaUtilityModClient implements ClientModInitializer {
         depositClickCooldown = 0;
         torchCooldown = 0;
         fillReplace = false;
+        sweepTargetId = -1;
+        sweepNoProgressTicks = 0;
+        sweepBestDistance = Double.MAX_VALUE;
+        sweepSkippedDrops.clear();
         resetPath();
         releaseMovementKeys(Minecraft.getInstance());
     }
