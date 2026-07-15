@@ -167,6 +167,7 @@ public class DeltaUtilityModClient implements ClientModInitializer {
     private static BlockPos pathTargetKey = null;
     private static int repathCooldown = 0;
     private static int pathRefreshTicks = 0;
+    private static int nearWaypointTicks = 0;
 
     // Eating state
     private static int eatTicks = 0;
@@ -1356,6 +1357,7 @@ public class DeltaUtilityModClient implements ClientModInitializer {
         path = null;
         pathIndex = 0;
         pathTargetKey = null;
+        nearWaypointTicks = 0;
     }
 
     private static void advanceWaypoints(Minecraft client) {
@@ -1366,10 +1368,28 @@ public class DeltaUtilityModClient implements ClientModInitializer {
             double dz = step.feet.getZ() + 0.5D - playerPos.z;
             double horizontal = Math.sqrt(dx * dx + dz * dz);
             double dy = playerPos.y - step.feet.getY();
-            if (horizontal < 0.45D && dy > -0.9D && dy < 1.25D) {
+            if (horizontal < 0.6D && dy > -0.9D && dy < 1.25D) {
                 pathIndex++;
+                nearWaypointTicks = 0;
             } else {
                 break;
+            }
+        }
+
+        // Orbit breaker: hovering near a waypoint without ever "arriving" means
+        // the steering is circling it - throw the path away and plan fresh.
+        if (pathIndex < path.size()) {
+            DeltaPathfinder.Step step = path.get(pathIndex);
+            Vec3 playerPos = client.player.position();
+            double dx = step.feet.getX() + 0.5D - playerPos.x;
+            double dz = step.feet.getZ() + 0.5D - playerPos.z;
+            if (dx * dx + dz * dz < 1.0D) {
+                nearWaypointTicks++;
+                if (nearWaypointTicks > 30) {
+                    resetPath();
+                }
+            } else {
+                nearWaypointTicks = 0;
             }
         }
     }
@@ -1393,20 +1413,35 @@ public class DeltaUtilityModClient implements ClientModInitializer {
         double horizontal = Math.sqrt(dx * dx + dz * dz);
 
         // Steer (yaw) toward the immediate waypoint, blending toward the next
-        // one as we get close so corners round off instead of stop-turn-go.
+        // one as we get close so corners round off - but never blend into a
+        // descending step, and never enough to orbit the waypoint.
         // Keep the eyes (pitch) on a point a few waypoints ahead so the camera
         // looks down the path instead of nodding at each waypoint underfoot.
         DeltaPathfinder.Step next = path.get(Math.min(path.size() - 1, pathIndex + 1));
-        double blend = Mth.clamp(1.0D - horizontal / 1.6D, 0.0D, 0.65D);
+        double blend = next.feet.getY() < step.feet.getY() ? 0.0D
+                : Mth.clamp(1.0D - horizontal / 1.4D, 0.0D, 0.5D);
         Vec3 steerPoint = new Vec3(
                 Mth.lerp(blend, waypoint.x, next.feet.getX() + 0.5D),
                 waypoint.y,
                 Mth.lerp(blend, waypoint.z, next.feet.getZ() + 0.5D));
         DeltaPathfinder.Step ahead = path.get(Math.min(path.size() - 1, pathIndex + 3));
         Vec3 lookAhead = new Vec3(ahead.feet.getX() + 0.5D, ahead.feet.getY() + 1.55D, ahead.feet.getZ() + 0.5D);
-        faceAngles(client, yawToward(client, steerPoint), pitchToward(client, lookAhead), TURN_SPEED_WALK);
+        float steerYaw = yawToward(client, steerPoint);
+        faceAngles(client, steerYaw, pitchToward(client, lookAhead), TURN_SPEED_WALK);
 
-        client.options.keyUp.setDown(horizontal > 0.08D);
+        // Anti-orbit: don't move forward while badly misaligned - turn in place
+        // first. (Movement follows the camera, so walking mid-turn arcs sideways.)
+        float alignError = Math.abs(Mth.wrapDegrees(steerYaw - client.player.getYRot()));
+        boolean wantForward = horizontal > 0.08D && alignError < 60.0F;
+
+        // Cliff guard: never walk toward a drop deeper than a safe fall.
+        if (wantForward && isDangerousDropAhead(client)) {
+            releaseMovementKeys(client);
+            resetPath();
+            return;
+        }
+
+        client.options.keyUp.setDown(wantForward);
         client.options.keyDown.setDown(false);
         client.options.keyLeft.setDown(false);
         client.options.keyRight.setDown(false);
@@ -1414,7 +1449,7 @@ public class DeltaUtilityModClient implements ClientModInitializer {
 
         boolean climbing = step.feet.getY() > client.player.blockPosition().getY();
         int remainingSteps = path.size() - pathIndex;
-        client.options.keySprint.setDown(!climbing && remainingSteps > 5 && horizontal > 1.5D);
+        client.options.keySprint.setDown(wantForward && !climbing && remainingSteps > 5 && horizontal > 1.5D);
 
         // Jump when climbing to a higher waypoint, when a one-block lip sits in the
         // walking line (e.g. a freshly placed fill block), or when wedged in place.
@@ -1438,6 +1473,39 @@ public class DeltaUtilityModClient implements ClientModInitializer {
         } else {
             client.options.keyJump.setDown(false);
         }
+    }
+
+    /**
+     * True when walking forward (in the direction the player faces, which is
+     * where movement goes) would step over a drop deeper than 3 blocks or into
+     * lava. Checks two probe points just ahead of the feet.
+     */
+    private static boolean isDangerousDropAhead(Minecraft client) {
+        if (client == null || client.player == null || !client.player.onGround()) {
+            return false;
+        }
+        double yawRadians = Math.toRadians(client.player.getYRot());
+        double nx = -Math.sin(yawRadians);
+        double nz = Math.cos(yawRadians);
+
+        BlockPos ahead = BlockPos.containing(
+                client.player.getX() + nx * 0.75D,
+                client.player.getY(),
+                client.player.getZ() + nz * 0.75D);
+        if (ahead.equals(client.player.blockPosition()) || !DeltaPathfinder.passable(client, ahead)) {
+            return false; // same column, or a wall - not a hole
+        }
+
+        for (int down = 1; down <= 5; down++) {
+            BlockPos below = ahead.below(down);
+            if (DeltaPathfinder.solid(client, below)) {
+                // Feet would land one above the solid block: fall height is down-1.
+                BlockPos landingFeet = ahead.below(down - 1);
+                boolean lava = client.level.getBlockState(landingFeet).getFluidState().is(FluidTags.LAVA);
+                return down > 4 || lava;
+            }
+        }
+        return true; // nothing solid within 5 blocks below: treat as a cliff
     }
 
     private static boolean updateStuckState(Minecraft client) {
@@ -1468,10 +1536,11 @@ public class DeltaUtilityModClient implements ClientModInitializer {
         double dz = targetCenter.z - playerPos.z;
         double horizontal = Math.sqrt(dx * dx + dz * dz);
 
-        client.options.keyUp.setDown(horizontal > 0.40D);
+        boolean wantForward = horizontal > 0.40D && !isDangerousDropAhead(client);
+        client.options.keyUp.setDown(wantForward);
         client.options.keyShift.setDown(false);
         client.options.keyDown.setDown(false);
-        client.options.keySprint.setDown(horizontal > 4.0D && !stuck);
+        client.options.keySprint.setDown(wantForward && horizontal > 4.0D && !stuck);
 
         if (stuck) {
             boolean goLeft = ((client.player.tickCount / 20) % 2) == 0;
@@ -1853,7 +1922,7 @@ public class DeltaUtilityModClient implements ClientModInitializer {
         Vec3 direction = flat.normalize();
         Vec3 lookPoint = client.player.position().add(direction.scale(2.0D)).add(0.0D, 1.0D, 0.0D);
         faceSmooth(client, lookPoint, TURN_SPEED_WALK);
-        client.options.keyUp.setDown(true);
+        client.options.keyUp.setDown(!isDangerousDropAhead(client));
         client.options.keySprint.setDown(false);
 
         // Hop out if the escape direction has a one-block lip in the way.
