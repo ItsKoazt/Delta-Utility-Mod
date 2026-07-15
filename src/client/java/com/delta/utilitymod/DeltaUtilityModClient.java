@@ -184,6 +184,10 @@ public class DeltaUtilityModClient implements ClientModInitializer {
 
     // Selection outline
     private static int outlineParticleTicks = 0;
+    // Hidden after a job is stopped so the box doesn't linger; the selection
+    // itself is kept so /automine start can reuse it. Reappears when positions
+    // are set again or a new job starts.
+    private static boolean outlineHidden = false;
 
     @Override
     public void onInitializeClient() {
@@ -243,6 +247,7 @@ public class DeltaUtilityModClient implements ClientModInitializer {
                     .then(ClientCommands.literal("outline")
                             .then(ClientCommands.literal("on").executes(context -> {
                                 setSelectionOutlineEnabled(true);
+                                outlineHidden = false;
                                 context.getSource().sendFeedback(Component.literal("§aSelection outline enabled."));
                                 return 1;
                             }))
@@ -293,7 +298,7 @@ public class DeltaUtilityModClient implements ClientModInitializer {
                             return 0;
                         }
                         stopJob();
-                        context.getSource().sendFeedback(Component.literal("§cAutoFill stopped."));
+                        context.getSource().sendFeedback(Component.literal("§cAutoFill stopped. §7Selection kept (outline hidden) - restart with §f/autofill start§7 or clear with §f/autofill reset§7."));
                         return 1;
                     }))
                     .then(ClientCommands.literal("reset").executes(context -> {
@@ -333,7 +338,7 @@ public class DeltaUtilityModClient implements ClientModInitializer {
                     }))
                     .then(ClientCommands.literal("stop").executes(context -> {
                         stopJob();
-                        context.getSource().sendFeedback(Component.literal("§cAutoMine stopped."));
+                        context.getSource().sendFeedback(Component.literal("§cAutoMine stopped. §7Selection kept (outline hidden) - §f/automine start§7 to reuse, §f/automine reset§7 to clear."));
                         return 1;
                     }))
                     .then(ClientCommands.literal("reset").executes(context -> {
@@ -514,6 +519,7 @@ public class DeltaUtilityModClient implements ClientModInitializer {
         } else {
             pos2 = lookingAt.immutable();
         }
+        outlineHidden = false;
         BlockPos set = which == 1 ? pos1 : pos2;
         return "§aPos" + which + " set to §f" + format(set) + selectionSummary();
     }
@@ -544,6 +550,7 @@ public class DeltaUtilityModClient implements ClientModInitializer {
         wasInventoryFull = false;
         minePhase = MinePhase.WORK;
         phaseTicks = 0;
+        outlineHidden = false;
         delayedMineTargets.clear();
         resetPath();
         String filterNote = filterBlocks.isEmpty() ? "" : " §7(filter active: " + filterBlocks.size() + " block(s), "
@@ -1796,6 +1803,7 @@ public class DeltaUtilityModClient implements ClientModInitializer {
         placeCooldown = 0;
         lowHealthTriggered = false;
         wasInventoryFull = false;
+        outlineHidden = false;
         resetPath();
         source.sendFeedback(Component.literal(replace
                 ? "§aAutoFill (replace mode) started with §f" + fillBlockName + "§a. §eExisting blocks in the area will be mined and replaced. §aBlocks queued: §f" + queue.size()
@@ -2454,7 +2462,7 @@ public class DeltaUtilityModClient implements ClientModInitializer {
     // ------------------------------------------------------------------
 
     private static void tickSelectionOutline(Minecraft client) {
-        if (!selectionOutlineEnabled || client == null || client.level == null || client.player == null || pos1 == null || pos2 == null) {
+        if (!selectionOutlineEnabled || outlineHidden || client == null || client.level == null || client.player == null || pos1 == null || pos2 == null) {
             return;
         }
 
@@ -2865,6 +2873,7 @@ public class DeltaUtilityModClient implements ClientModInitializer {
     private static void clearSelection() {
         pos1 = null;
         pos2 = null;
+        outlineHidden = false;
         currentTarget = null;
         queue.clear();
         delayedMineTargets.clear();
@@ -2874,6 +2883,7 @@ public class DeltaUtilityModClient implements ClientModInitializer {
     private static void stopJob() {
         running = false;
         paused = false;
+        outlineHidden = true;
         currentTarget = null;
         lastBreakTarget = null;
         lastMinedPos = null;
