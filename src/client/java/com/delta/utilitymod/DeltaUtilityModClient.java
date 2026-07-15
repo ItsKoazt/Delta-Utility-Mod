@@ -837,10 +837,10 @@ public class DeltaUtilityModClient implements ClientModInitializer {
             return;
         }
 
-        // In range: mining doesn't need camera control, so leave the view alone.
         releaseMovementKeys(client);
         stuckTicks = 0;
         resetPath();
+        faceSmooth(client, centerOf(currentTarget), 11.0F);
 
         if (autoTools && !switchToBestTool(client, currentTarget)) {
             stopJob();
@@ -936,6 +936,7 @@ public class DeltaUtilityModClient implements ClientModInitializer {
 
         releaseMovementKeys(client);
         resetPath();
+        faceSmooth(client, centerOf(depositChest), 11.0F);
 
         if (client.player.containerMenu.containerId == 0) {
             if (phaseTicks % 10 == 1) {
@@ -1257,6 +1258,7 @@ public class DeltaUtilityModClient implements ClientModInitializer {
         if (clearBlock != null) {
             if (withinRange(client, clearBlock, maxRange)) {
                 releaseMovementKeys(client);
+                faceSmooth(client, centerOf(clearBlock), 11.0F);
                 if (autoTools) {
                     switchToBestTool(client, clearBlock);
                 }
@@ -1328,7 +1330,7 @@ public class DeltaUtilityModClient implements ClientModInitializer {
     private static void walkToward(Minecraft client, DeltaPathfinder.Step step) {
         Vec3 waypoint = new Vec3(step.feet.getX() + 0.5D, step.feet.getY() + 0.9D, step.feet.getZ() + 0.5D);
         Vec3 playerPos = client.player.position();
-        faceSmooth(client, waypoint, 45.0F);
+        faceSmooth(client, waypoint, 14.0F);
 
         double dx = waypoint.x - playerPos.x;
         double dz = waypoint.z - playerPos.z;
@@ -1390,7 +1392,7 @@ public class DeltaUtilityModClient implements ClientModInitializer {
         }
         Vec3 targetCenter = centerOf(target);
         Vec3 playerPos = client.player.position();
-        faceSmooth(client, targetCenter, 45.0F);
+        faceSmooth(client, targetCenter, 14.0F);
 
         double dx = targetCenter.x - playerPos.x;
         double dz = targetCenter.z - playerPos.z;
@@ -1712,10 +1714,10 @@ public class DeltaUtilityModClient implements ClientModInitializer {
             return;
         }
 
-        // In range: placing uses a synthetic hit result, no camera control needed.
         releaseMovementKeys(client);
         stuckTicks = 0;
         resetPath();
+        faceSmooth(client, centerOf(currentTarget), 11.0F);
 
         // An obstruction sits where the block goes: break it first, then place
         // on a later tick. In replace mode this can be any solid block, so use
@@ -1774,7 +1776,7 @@ public class DeltaUtilityModClient implements ClientModInitializer {
         }
         Vec3 direction = flat.normalize();
         Vec3 lookPoint = client.player.position().add(direction.scale(2.0D)).add(0.0D, 1.0D, 0.0D);
-        faceSmooth(client, lookPoint, 60.0F);
+        faceSmooth(client, lookPoint, 14.0F);
         client.options.keyUp.setDown(true);
         client.options.keySprint.setDown(false);
 
@@ -2133,7 +2135,11 @@ public class DeltaUtilityModClient implements ClientModInitializer {
         return new Vec3(pos.getX() + 0.5D, pos.getY() + 0.5D, pos.getZ() + 0.5D);
     }
 
-    /** Rotates the camera toward the target, limited to maxStep degrees per tick. */
+    /**
+     * Rotates the camera toward the target with proportional easing: fast while
+     * far off-target, decelerating as it lines up. maxStep caps degrees per tick.
+     * The camera renderer interpolates between ticks, so this looks fluid.
+     */
     private static void faceSmooth(Minecraft client, Vec3 target, float maxStep) {
         if (client == null || client.player == null) {
             return;
@@ -2150,11 +2156,19 @@ public class DeltaUtilityModClient implements ClientModInitializer {
 
         float yawDelta = Mth.wrapDegrees(desiredYaw - client.player.getYRot());
         float pitchDelta = Mth.wrapDegrees(desiredPitch - client.player.getXRot());
-        yawDelta = Mth.clamp(yawDelta, -maxStep, maxStep);
-        pitchDelta = Mth.clamp(pitchDelta, -maxStep, maxStep);
 
-        client.player.setYRot(client.player.getYRot() + yawDelta);
-        client.player.setXRot(Mth.clamp(client.player.getXRot() + pitchDelta, -90.0F, 90.0F));
+        client.player.setYRot(client.player.getYRot() + easedStep(yawDelta, maxStep));
+        client.player.setXRot(Mth.clamp(client.player.getXRot() + easedStep(pitchDelta, maxStep), -90.0F, 90.0F));
+    }
+
+    /** Eased rotation step: 35% of the remaining angle, at least 2°, at most maxStep. */
+    private static float easedStep(float delta, float maxStep) {
+        float magnitude = Math.abs(delta);
+        if (magnitude < 0.25F) {
+            return delta; // close enough: settle exactly on target
+        }
+        float step = Math.min(maxStep, Math.max(2.0F, magnitude * 0.35F));
+        return Math.min(step, magnitude) * Math.signum(delta);
     }
 
     private static Direction getHitDirection(Minecraft client, BlockPos pos) {
