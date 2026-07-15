@@ -11,9 +11,22 @@ New Features
 * Added AutoFill replace mode: `/autofill start <block> replace` also mines out existing blocks, turning fill into a full "set this area to X" operation. Normal fill still never touches solid blocks.
 * Added falling block awareness: the bot sidesteps when gravel or sand hangs unsupported above its head, and pathfinding avoids standing under floating gravel.
 
-Camera and Outline
+Camera Overhaul
 
-* The mod no longer takes over your camera while breaking or placing blocks. It only steers the view while actually walking, since mining and placing never needed it. Watching something else while it works is now comfortable.
+* Camera motion is now computed every frame (not every game tick) through a spring-damper model, so aim moves like a hand on a mouse: fluid at any framerate, eases in and out, never oscillates.
+* The bot looks at the block before breaking it: mining waits until the view is centered (within 12 degrees), so the camera leads and the pickaxe follows instead of trailing a block behind.
+* Mining targets are chosen with the current view direction in mind, so the camera sweeps across a wall instead of ping-ponging between far corners.
+* While walking, the view steers around corners smoothly and looks down the path ahead instead of nodding at each step.
+* Touch your mouse and the bot instantly yields the camera for half a second instead of fighting you for it.
+
+Movement Safety
+
+* Fixed the bot occasionally circling a spot without arriving: it now turns in place when badly misaligned and replans if it hovers near a waypoint too long.
+* New cliff guard: the bot never walks off drops deeper than 3 blocks or into lava, in any movement mode. Safe drops (3 blocks or less) still work.
+* The bot sidesteps unsupported gravel/sand hanging above its head, and pathfinding avoids standing under it.
+
+Outline
+
 * The selection outline is now a dense, near-solid colored line (still particles, drawn with steady dust instead of drifting sparkles).
 * The outline color is configurable with hex codes: `/delta outline color 3DE1FF` or the new Outline Color field in the config screen. Default is a Delta cyan.
 
