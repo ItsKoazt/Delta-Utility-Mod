@@ -14,8 +14,12 @@ New Features
 * Added smooth camera rotation instead of instant snapping.
 * Added a selection size limit of 262,144 blocks (64x64x64) so huge selections can no longer freeze the game.
 * Added live selection size feedback when setting `/pos1` and `/pos2`.
+* Added Health Safety: jobs pause automatically when your health drops to a configurable level (default 6 of 20). Set to 0 to disable.
+* Added inventory-full protection: AutoMine pauses with a warning when your inventory has no free slot, so drops do not despawn.
+* Added keybinds, rebindable under Controls: Set Pos1 (default [), Set Pos2 (default ]), Start / Pause AutoMine (default \), and Stop Current Job (unbound).
 * Added `/delta help` for a full command list in chat.
 * Added `/automine lavasafety <true|false>`.
+* Added `/automine health <0-19>`.
 * Added `/autofill reset`.
 
 AutoFill Improvements

@@ -34,6 +34,7 @@ public final class DeltaUtilityModMenu implements ModMenuApi {
         private boolean autoTools;
         private boolean autoEat;
         private boolean lavaSafety;
+        private int pauseHealth;
         private int hunger;
         private int miningRange;
         private int moveRange;
@@ -60,6 +61,7 @@ public final class DeltaUtilityModMenu implements ModMenuApi {
             autoTools = DeltaUtilityModClient.isAutoToolsEnabled();
             autoEat = DeltaUtilityModClient.isAutoEatEnabled();
             lavaSafety = DeltaUtilityModClient.isLavaSafetyEnabled();
+            pauseHealth = DeltaUtilityModClient.getPauseHealth();
             hunger = DeltaUtilityModClient.getHungerThreshold();
             miningRange = DeltaUtilityModClient.getMiningRange();
             moveRange = DeltaUtilityModClient.getMoveStopRange();
@@ -72,7 +74,7 @@ public final class DeltaUtilityModMenu implements ModMenuApi {
             int center = this.width / 2;
             leftX = center - COLUMN_WIDTH - 5;
             rightX = center + 5;
-            contentTop = Math.max(26, this.height / 2 - 102);
+            contentTop = Math.max(22, this.height / 2 - 112);
 
             int y = contentTop;
 
@@ -115,7 +117,11 @@ public final class DeltaUtilityModMenu implements ModMenuApi {
             addToggle(leftX, y, "Lava Safety", lavaSafety,
                     "Skips mining blocks that touch lava so the bot can't flood itself.",
                     value -> lavaSafety = value);
-            addToggle(rightX, y, "Selection Outline", outline,
+            addSlider(rightX, y, "Pause At Health", 0, 19, pauseHealth,
+                    "Pauses the job when your health (out of 20) drops to this or lower. 0 disables.",
+                    value -> pauseHealth = value);
+            y += ROW_GAP;
+            addToggle(leftX, y, "Selection Outline", outline,
                     "Shows particle edges around the /pos1 - /pos2 selection box.",
                     value -> outline = value);
             y += ROW_GAP + 6;
@@ -137,6 +143,7 @@ public final class DeltaUtilityModMenu implements ModMenuApi {
                         autoTools = true;
                         autoEat = true;
                         lavaSafety = true;
+                        pauseHealth = 6;
                         hunger = 14;
                         miningRange = 5;
                         moveRange = 4;
@@ -204,6 +211,7 @@ public final class DeltaUtilityModMenu implements ModMenuApi {
             DeltaUtilityModClient.setAutoToolsEnabled(autoTools);
             DeltaUtilityModClient.setAutoEatEnabled(autoEat);
             DeltaUtilityModClient.setLavaSafetyEnabled(lavaSafety);
+            DeltaUtilityModClient.setPauseHealth(pauseHealth);
             DeltaUtilityModClient.setHungerThreshold(hunger);
             DeltaUtilityModClient.setMiningRange(miningRange);
             DeltaUtilityModClient.setMoveStopRange(moveRange);

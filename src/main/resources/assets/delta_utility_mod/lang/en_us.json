@@ -1,4 +1,9 @@
 {
+  "key.delta_utility_mod.pos1": "Set Pos1",
+  "key.delta_utility_mod.pos2": "Set Pos2",
+  "key.delta_utility_mod.start_pause": "Start / Pause AutoMine",
+  "key.delta_utility_mod.stop": "Stop Current Job",
+  "key.categories.delta_utility_mod.keys": "Delta Utility Mod",
   "modmenu.nameTranslation.delta_utility_mod": "Delta Utility Mod",
   "modmenu.summaryTranslation.delta_utility_mod": "Client-side utility tools for area mining, filling, and automation.",
   "modmenu.descriptionTranslation.delta_utility_mod": "Delta Utility Mod is a client-side Fabric mod with /pos1 and /pos2 area selection, AutoMine, AutoFill, A* pathfinding, pause/resume, auto tool switching, durability protection, lava safety, auto eating, and movement helpers."

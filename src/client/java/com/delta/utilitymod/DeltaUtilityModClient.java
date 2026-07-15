@@ -1,13 +1,16 @@
 package com.delta.utilitymod;
 
+import com.mojang.blaze3d.platform.InputConstants;
 import com.mojang.brigadier.arguments.BoolArgumentType;
 import com.mojang.brigadier.arguments.IntegerArgumentType;
 import com.mojang.brigadier.arguments.StringArgumentType;
 import net.fabricmc.api.ClientModInitializer;
+import net.fabricmc.fabric.api.client.keymapping.v1.KeyMappingHelper;
 import net.fabricmc.fabric.api.client.command.v2.ClientCommandRegistrationCallback;
 import net.fabricmc.fabric.api.client.command.v2.ClientCommands;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.loader.api.FabricLoader;
+import net.minecraft.client.KeyMapping;
 import net.minecraft.client.Minecraft;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
@@ -15,6 +18,7 @@ import net.minecraft.core.component.DataComponents;
 import net.minecraft.core.particles.ParticleTypes;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.chat.Component;
+import net.minecraft.resources.Identifier;
 import net.minecraft.tags.FluidTags;
 import net.minecraft.util.Mth;
 import net.minecraft.world.InteractionHand;
@@ -28,6 +32,7 @@ import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
+import org.lwjgl.glfw.GLFW;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -83,6 +88,17 @@ public class DeltaUtilityModClient implements ClientModInitializer {
     private static double maxRange = 4.5D;
     private static double moveStopRange = 3.8D;
     private static int minToolDurability = 25;
+    private static int pauseHealth = 6; // health points out of 20; 0 disables
+
+    // Safety state
+    private static boolean lowHealthTriggered = false;
+    private static boolean wasInventoryFull = false;
+
+    // Keybindings
+    private static KeyMapping keySetPos1;
+    private static KeyMapping keySetPos2;
+    private static KeyMapping keyStartPause;
+    private static KeyMapping keyStopJob;
 
     // Breaking state
     private static BlockPos lastBreakTarget = null;
@@ -118,7 +134,21 @@ public class DeltaUtilityModClient implements ClientModInitializer {
     public void onInitializeClient() {
         loadSettings();
         registerCommands();
+        registerKeyMappings();
         ClientTickEvents.END_CLIENT_TICK.register(DeltaUtilityModClient::onClientTick);
+    }
+
+    private static void registerKeyMappings() {
+        KeyMapping.Category category = KeyMapping.Category.register(
+                Identifier.fromNamespaceAndPath("delta_utility_mod", "keys"));
+        keySetPos1 = KeyMappingHelper.registerKeyMapping(new KeyMapping(
+                "key.delta_utility_mod.pos1", InputConstants.Type.KEYSYM, GLFW.GLFW_KEY_LEFT_BRACKET, category));
+        keySetPos2 = KeyMappingHelper.registerKeyMapping(new KeyMapping(
+                "key.delta_utility_mod.pos2", InputConstants.Type.KEYSYM, GLFW.GLFW_KEY_RIGHT_BRACKET, category));
+        keyStartPause = KeyMappingHelper.registerKeyMapping(new KeyMapping(
+                "key.delta_utility_mod.start_pause", InputConstants.Type.KEYSYM, GLFW.GLFW_KEY_BACKSLASH, category));
+        keyStopJob = KeyMappingHelper.registerKeyMapping(new KeyMapping(
+                "key.delta_utility_mod.stop", InputConstants.Type.KEYSYM, GLFW.GLFW_KEY_UNKNOWN, category));
     }
 
     // ------------------------------------------------------------------
@@ -128,25 +158,15 @@ public class DeltaUtilityModClient implements ClientModInitializer {
     private static void registerCommands() {
         ClientCommandRegistrationCallback.EVENT.register((dispatcher, registryAccess) -> {
             dispatcher.register(ClientCommands.literal("pos1").executes(context -> {
-                BlockPos lookingAt = getLookingAtBlock();
-                if (lookingAt == null) {
-                    context.getSource().sendFeedback(Component.literal("§cLook at a block first, then run /pos1."));
-                    return 0;
-                }
-                pos1 = lookingAt.immutable();
-                context.getSource().sendFeedback(Component.literal("§aPos1 set to §f" + format(pos1) + selectionSummary()));
-                return 1;
+                String message = setPosFromLook(1);
+                context.getSource().sendFeedback(Component.literal(message));
+                return message.startsWith("§c") ? 0 : 1;
             }));
 
             dispatcher.register(ClientCommands.literal("pos2").executes(context -> {
-                BlockPos lookingAt = getLookingAtBlock();
-                if (lookingAt == null) {
-                    context.getSource().sendFeedback(Component.literal("§cLook at a block first, then run /pos2."));
-                    return 0;
-                }
-                pos2 = lookingAt.immutable();
-                context.getSource().sendFeedback(Component.literal("§aPos2 set to §f" + format(pos2) + selectionSummary()));
-                return 1;
+                String message = setPosFromLook(2);
+                context.getSource().sendFeedback(Component.literal(message));
+                return message.startsWith("§c") ? 0 : 1;
             }));
 
             dispatcher.register(ClientCommands.literal("delta")
@@ -155,8 +175,9 @@ public class DeltaUtilityModClient implements ClientModInitializer {
                                 "§b--- Delta Utilities ---",
                                 "§f/pos1§7, §f/pos2 §7- select the area you are looking at",
                                 "§f/automine start|pause|resume|stop|reset|status",
-                                "§f/automine range|moverange|delay|hunger|mindurability <n>",
+                                "§f/automine range|moverange|delay|hunger|health|mindurability <n>",
                                 "§f/automine move|tools|eat|lavasafety <true|false>",
+                                "§7Keybinds (see Controls): set pos1/pos2, start/pause, stop",
                                 "§f/autofill start <block>§7, §fpause|resume|stop|reset|status",
                                 "§f/delta outline on|off §7- selection outline particles")));
                         return 1;
@@ -217,33 +238,9 @@ public class DeltaUtilityModClient implements ClientModInitializer {
 
             dispatcher.register(ClientCommands.literal("automine")
                     .then(ClientCommands.literal("start").executes(context -> {
-                        if (pos1 == null || pos2 == null) {
-                            context.getSource().sendFeedback(Component.literal("§cSet /pos1 and /pos2 first."));
-                            return 0;
-                        }
-                        long volume = selectionVolume();
-                        if (volume > MAX_SELECTION_VOLUME) {
-                            context.getSource().sendFeedback(Component.literal("§cSelection is too large: §f" + volume
-                                    + " §cblocks (max §f" + MAX_SELECTION_VOLUME + "§c). Pick a smaller area."));
-                            return 0;
-                        }
-                        buildMineQueue();
-                        startTaskTracking(queue.size());
-                        jobMode = JobMode.MINE;
-                        running = true;
-                        paused = false;
-                        currentTarget = null;
-                        lastMinedPos = null;
-                        tickCooldown = 0;
-                        eatTicks = 0;
-                        stuckTicks = 0;
-                        targetTicks = 0;
-                        breakRestartTicks = 0;
-                        lavaSkippedCount = 0;
-                        delayedMineTargets.clear();
-                        resetPath();
-                        context.getSource().sendFeedback(Component.literal("§aAutoMine started. Blocks queued: §f" + queue.size()));
-                        return 1;
+                        String message = startAutoMineJob();
+                        context.getSource().sendFeedback(Component.literal(message));
+                        return message.startsWith("§c") ? 0 : 1;
                     }))
                     .then(ClientCommands.literal("pause").executes(context -> {
                         if (!running) {
@@ -320,6 +317,14 @@ public class DeltaUtilityModClient implements ClientModInitializer {
                                 context.getSource().sendFeedback(Component.literal("§aAutoMine lava safety set to §f" + lavaSafety));
                                 return 1;
                             })))
+                    .then(ClientCommands.literal("health")
+                            .then(ClientCommands.argument("level", IntegerArgumentType.integer(0, 19)).executes(context -> {
+                                setPauseHealth(IntegerArgumentType.getInteger(context, "level"));
+                                context.getSource().sendFeedback(Component.literal(pauseHealth <= 0
+                                        ? "§aHealth safety disabled."
+                                        : "§aJobs will pause at health §f" + pauseHealth + "§a/20 or lower."));
+                                return 1;
+                            })))
                     .then(ClientCommands.literal("hunger")
                             .then(ClientCommands.argument("level", IntegerArgumentType.integer(1, 19)).executes(context -> {
                                 setHungerThreshold(IntegerArgumentType.getInteger(context, "level"));
@@ -334,6 +339,49 @@ public class DeltaUtilityModClient implements ClientModInitializer {
                             })))
             );
         });
+    }
+
+    private static String setPosFromLook(int which) {
+        BlockPos lookingAt = getLookingAtBlock();
+        if (lookingAt == null) {
+            return "§cLook at a block first.";
+        }
+        if (which == 1) {
+            pos1 = lookingAt.immutable();
+        } else {
+            pos2 = lookingAt.immutable();
+        }
+        BlockPos set = which == 1 ? pos1 : pos2;
+        return "§aPos" + which + " set to §f" + format(set) + selectionSummary();
+    }
+
+    private static String startAutoMineJob() {
+        if (pos1 == null || pos2 == null) {
+            return "§cSet /pos1 and /pos2 first.";
+        }
+        long volume = selectionVolume();
+        if (volume > MAX_SELECTION_VOLUME) {
+            return "§cSelection is too large: §f" + volume
+                    + " §cblocks (max §f" + MAX_SELECTION_VOLUME + "§c). Pick a smaller area.";
+        }
+        buildMineQueue();
+        startTaskTracking(queue.size());
+        jobMode = JobMode.MINE;
+        running = true;
+        paused = false;
+        currentTarget = null;
+        lastMinedPos = null;
+        tickCooldown = 0;
+        eatTicks = 0;
+        stuckTicks = 0;
+        targetTicks = 0;
+        breakRestartTicks = 0;
+        lavaSkippedCount = 0;
+        lowHealthTriggered = false;
+        wasInventoryFull = false;
+        delayedMineTargets.clear();
+        resetPath();
+        return "§aAutoMine started. Blocks queued: §f" + queue.size();
     }
 
     private static void pauseJob() {
@@ -378,6 +426,7 @@ public class DeltaUtilityModClient implements ClientModInitializer {
 
     private static void onClientTick(Minecraft client) {
         tickSelectionOutline(client);
+        handleKeyMappings(client);
 
         if (!running) {
             return;
@@ -417,11 +466,99 @@ public class DeltaUtilityModClient implements ClientModInitializer {
             wasEating = false;
         }
 
+        if (checkHealthSafety(client)) {
+            return;
+        }
+        if (jobMode == JobMode.MINE && checkInventoryFull(client)) {
+            return;
+        }
+
         if (jobMode == JobMode.FILL) {
             onFillTick(client);
         } else {
             onMineTick(client);
         }
+    }
+
+    private static void handleKeyMappings(Minecraft client) {
+        if (client == null || client.player == null || keySetPos1 == null) {
+            return;
+        }
+        while (keySetPos1.consumeClick()) {
+            client.player.sendSystemMessage(Component.literal(setPosFromLook(1)));
+        }
+        while (keySetPos2.consumeClick()) {
+            client.player.sendSystemMessage(Component.literal(setPosFromLook(2)));
+        }
+        while (keyStartPause.consumeClick()) {
+            if (!running) {
+                client.player.sendSystemMessage(Component.literal(startAutoMineJob()));
+            } else if (paused) {
+                resumeJob();
+                client.player.sendSystemMessage(Component.literal("§a" + jobLabel() + " resumed."));
+            } else {
+                pauseJob();
+                client.player.sendSystemMessage(Component.literal("§e" + jobLabel() + " paused."));
+            }
+        }
+        while (keyStopJob.consumeClick()) {
+            if (running) {
+                String label = jobLabel();
+                stopJob();
+                client.player.sendSystemMessage(Component.literal("§c" + label + " stopped."));
+            }
+        }
+    }
+
+    private static String jobLabel() {
+        return jobMode == JobMode.FILL ? "AutoFill" : "AutoMine";
+    }
+
+    /** Pauses the job when health drops to the configured level; resumes only by hand. */
+    private static boolean checkHealthSafety(Minecraft client) {
+        if (pauseHealth <= 0) {
+            lowHealthTriggered = false;
+            return false;
+        }
+        float health = client.player.getHealth();
+        if (health > pauseHealth + 4.0F) {
+            lowHealthTriggered = false;
+        }
+        if (!lowHealthTriggered && health <= pauseHealth) {
+            lowHealthTriggered = true;
+            String resumeCommand = jobMode == JobMode.FILL ? "/autofill resume" : "/automine resume";
+            pauseJob();
+            client.player.sendSystemMessage(Component.literal("§c" + jobLabel() + " paused: health is low ("
+                    + (int) Math.ceil(health) + "/20). Heal up, then use §f" + resumeCommand + "§c."));
+            return true;
+        }
+        return false;
+    }
+
+    /** Pauses mining when the inventory has no free slot left, so drops don't despawn. */
+    private static boolean checkInventoryFull(Minecraft client) {
+        if (client.player.tickCount % 20 != 0) {
+            return false;
+        }
+        boolean full = true;
+        int size = Math.min(36, client.player.getInventory().getContainerSize());
+        for (int slot = 0; slot < size; slot++) {
+            if (client.player.getInventory().getItem(slot).isEmpty()) {
+                full = false;
+                break;
+            }
+        }
+        if (full && !wasInventoryFull) {
+            wasInventoryFull = true;
+            pauseJob();
+            client.player.sendSystemMessage(Component.literal(
+                    "§eAutoMine paused: inventory is full. Make room, then use §f/automine resume§e."));
+            return true;
+        }
+        if (!full) {
+            wasInventoryFull = false;
+        }
+        return false;
     }
 
     // ------------------------------------------------------------------
@@ -1048,6 +1185,8 @@ public class DeltaUtilityModClient implements ClientModInitializer {
         currentTarget = null;
         tickCooldown = 0;
         placeCooldown = 0;
+        lowHealthTriggered = false;
+        wasInventoryFull = false;
         resetPath();
         source.sendFeedback(Component.literal("§aAutoFill started with §f" + fillBlockName + "§a. Blocks queued: §f" + queue.size()));
         return 1;
@@ -1718,6 +1857,15 @@ public class DeltaUtilityModClient implements ClientModInitializer {
         saveSettings();
     }
 
+    public static int getPauseHealth() {
+        return pauseHealth;
+    }
+
+    public static void setPauseHealth(int value) {
+        pauseHealth = Mth.clamp(value, 0, 19);
+        saveSettings();
+    }
+
     // ------------------------------------------------------------------
     // Settings persistence
     // ------------------------------------------------------------------
@@ -1741,6 +1889,7 @@ public class DeltaUtilityModClient implements ClientModInitializer {
             moveStopRange = readDouble(properties, "moveStopRange", moveStopRange, 1.0D, 6.0D);
             delayTicks = readInt(properties, "delayTicks", delayTicks, 1, 20);
             minToolDurability = readInt(properties, "minToolDurability", minToolDurability, 1, 250);
+            pauseHealth = readInt(properties, "pauseHealth", pauseHealth, 0, 19);
         } catch (Exception e) {
             LOGGER.warn("Failed to load Delta Utilities settings, rewriting defaults", e);
             saveSettings();
@@ -1761,6 +1910,7 @@ public class DeltaUtilityModClient implements ClientModInitializer {
             properties.setProperty("moveStopRange", Double.toString(moveStopRange));
             properties.setProperty("delayTicks", Integer.toString(delayTicks));
             properties.setProperty("minToolDurability", Integer.toString(minToolDurability));
+            properties.setProperty("pauseHealth", Integer.toString(pauseHealth));
             try (OutputStream output = Files.newOutputStream(CONFIG_PATH)) {
                 properties.store(output, "Delta Utilities settings");
             }
@@ -1901,6 +2051,8 @@ public class DeltaUtilityModClient implements ClientModInitializer {
         inventorySwapCooldown = 0;
         initialTaskBlocks = 0;
         taskStartedAtMillis = 0L;
+        lowHealthTriggered = false;
+        wasInventoryFull = false;
         resetPath();
         releaseMovementKeys(Minecraft.getInstance());
     }

@@ -11,6 +11,9 @@ Client-side Fabric utility mod for Minecraft 26.2: select an area, then let the 
 - **Smart tools** — picks the fastest safe tool in your hotbar, and if a better one is sitting in your inventory it swaps it into the hotbar automatically. Stops before any tool drops below the configured minimum durability.
 - **Auto eat** — eats from your hotbar or inventory when hunger drops below the threshold.
 - **Lava safety** (on by default) — skips blocks that touch lava so the bot never floods itself; skipped blocks are reported when the job finishes.
+- **Health safety** — pauses the job when your health drops to a configurable level (default 6/20), so it never mines on while you're dying. Set to 0 to disable.
+- **Inventory-full pause** — AutoMine pauses with a warning when your inventory has no free slot, so drops don't despawn on the ground.
+- **Keybinds** — set Pos1/Pos2 (default `[` / `]`), start/pause AutoMine (default `\`), and stop the current job, all rebindable under Controls.
 - **Safety cap** — selections above 262,144 blocks (64³) are refused instead of freezing the game.
 - **Smooth aim** — camera rotation is rate-limited instead of snapping.
 - Progress/ETA status, pause/resume that leaves your manual controls alone, and settings that persist in `config/delta-utilities.properties`.
@@ -32,6 +35,7 @@ Client-side Fabric utility mod for Minecraft 26.2: select an area, then let the 
 | `/automine tools <true\|false>` | Toggle smart tool switching |
 | `/automine eat <true\|false>` | Toggle auto eating |
 | `/automine hunger <1-19>` | Hunger level that triggers eating |
+| `/automine health <0-19>` | Health level that pauses the job (0 = off) |
 | `/automine lavasafety <true\|false>` | Toggle skipping lava-adjacent blocks |
 | `/automine mindurability <1-250>` | Minimum tool durability to keep |
 | `/autofill start <block>` | Fill the selection (e.g. `dirt` or `minecraft:dirt`) |
