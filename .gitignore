@@ -1,0 +1,22 @@
+# Gradle
+.gradle/
+build/
+
+# IDE
+.idea/
+*.iml
+.vscode/
+.classpath
+.project
+.settings/
+bin/
+
+# Fabric/Loom run directory
+run/
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Local tooling
+.claude/

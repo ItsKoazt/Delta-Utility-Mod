@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 1,
+  "id": "delta_utility_mod",
+  "version": "${version}",
+  "name": "Delta Utility Mod",
+  "description": "Delta Utility Mod is a client-side Fabric mod for selected-area mining and filling, with smart automation tools for repetitive block work.",
+  "contact": {},
+  "license": "MIT",
+  "environment": "client",
+  "entrypoints": {
+    "client": [
+      "com.delta.utilitymod.DeltaUtilityModClient"
+    ],
+    "modmenu": [
+      "com.delta.utilitymod.DeltaUtilityModMenu"
+    ]
+  },
+  "depends": {
+    "fabricloader": ">=0.19.3",
+    "minecraft": "~26.2",
+    "fabric-api": "*"
+  },
+  "suggests": {
+    "modmenu": "*"
+  },
+  "custom": {
+    "modmenu": {
+      "update_checker": false
+    }
+  },
+  "icon": "assets/delta_utility_mod/icon.png"
+}

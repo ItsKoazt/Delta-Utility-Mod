@@ -1,0 +1,55 @@
+# Delta Utility Mod
+
+Client-side Fabric utility mod for Minecraft 26.2: select an area, then let the mod mine it out or fill it in for you.
+
+## Features
+
+- **Area selection** with `/pos1` and `/pos2` (look at a block and run the command), with a particle outline of the selected box and live size feedback.
+- **AutoMine** — mines every block in the selection, top-down, preferring nearby and exposed blocks and saving the block under your feet for last.
+- **AutoFill** — fills the selection with a chosen block, bottom-up and farthest-first so it never seals you into a corner, and never places a block inside you. Fills straight through water, lava, tall grass, and snow, and breaks soft obstructions (flowers, saplings, torches) that occupy a fill spot.
+- **A\* pathfinding** — the bot walks real paths to out-of-reach blocks: it routes around terrain, takes diagonals, steps up, drops safely (max 3 blocks), and tunnels through blocks only when needed (cheaply inside the selection, reluctantly outside). Falls back to direct walking if no path is found.
+- **Smart tools** — picks the fastest safe tool in your hotbar, and if a better one is sitting in your inventory it swaps it into the hotbar automatically. Stops before any tool drops below the configured minimum durability.
+- **Auto eat** — eats from your hotbar or inventory when hunger drops below the threshold.
+- **Lava safety** (on by default) — skips blocks that touch lava so the bot never floods itself; skipped blocks are reported when the job finishes.
+- **Safety cap** — selections above 262,144 blocks (64³) are refused instead of freezing the game.
+- **Smooth aim** — camera rotation is rate-limited instead of snapping.
+- Progress/ETA status, pause/resume that leaves your manual controls alone, and settings that persist in `config/delta-utilities.properties`.
+- Optional **Mod Menu** config screen with all settings (toggles + sliders).
+
+## Commands
+
+| Command | What it does |
+| --- | --- |
+| `/pos1`, `/pos2` | Set the selection corners to the block you're looking at |
+| `/automine start` | Mine everything in the selection |
+| `/automine pause` / `resume` / `stop` | Control the current job |
+| `/automine reset` | Stop and clear the selection |
+| `/automine status` | Blocks left, progress %, ETA |
+| `/automine range <1-6>` | Max block-breaking distance |
+| `/automine moverange <1-6>` | How close the bot walks before stopping |
+| `/automine delay <1-20>` | Ticks between block breaks |
+| `/automine move <true\|false>` | Toggle automatic walking |
+| `/automine tools <true\|false>` | Toggle smart tool switching |
+| `/automine eat <true\|false>` | Toggle auto eating |
+| `/automine hunger <1-19>` | Hunger level that triggers eating |
+| `/automine lavasafety <true\|false>` | Toggle skipping lava-adjacent blocks |
+| `/automine mindurability <1-250>` | Minimum tool durability to keep |
+| `/autofill start <block>` | Fill the selection (e.g. `dirt` or `minecraft:dirt`) |
+| `/autofill pause` / `resume` / `stop` / `reset` / `status` | Control AutoFill |
+| `/delta outline on` / `off` | Toggle the selection outline particles |
+| `/delta help` | Command summary in chat |
+
+## Building
+
+Requires JDK 25.
+
+```
+gradle build
+```
+
+The jar is written to `build/libs/Delta.jar`.
+
+## Notes
+
+- This mod automates player input (movement, aiming, mining, eating). Anti-cheat plugins on multiplayer servers are likely to flag that; use it only where automation is allowed.
+- The mod is fully client-side; nothing needs to be installed on the server.
