@@ -109,8 +109,8 @@ public class DeltaUtilityModClient implements ClientModInitializer {
 
     // Camera control. Ticks decide WHERE to look (targets); a render-loop mixin
     // moves the view toward the target every FRAME, so motion is fluid at any fps.
-    private static final float TURN_SPEED_WORK = 25.0F;  // deg/tick cap while mining/placing
-    private static final float TURN_SPEED_WALK = 24.0F;  // deg/tick cap while walking
+    private static final float TURN_SPEED_WORK = 32.0F;  // deg/tick cap while mining/placing
+    private static final float TURN_SPEED_WALK = 28.0F;  // deg/tick cap while walking
     private static final float AIM_THRESHOLD_DEG = 12.0F;
     private static float cameraTargetYaw = 0.0F;
     private static float cameraTargetPitch = 0.0F;
@@ -2369,9 +2369,9 @@ public class DeltaUtilityModClient implements ClientModInitializer {
 
     /** Critically damped spring step: smooth ease-in/ease-out, no oscillation. */
     private static float springVelocity(float velocity, float error, float dt, float maxSpeed) {
-        // Stiff spring: reaches a typical next-block target in ~0.15-0.25s so the
+        // Stiff spring: reaches a typical next-block target in ~0.1-0.2s so the
         // view is centered on the block being mined, not trailing one behind.
-        float omega = 14.0F;
+        float omega = 18.0F;
         velocity += (error * omega * omega - 2.0F * omega * velocity) * dt;
         return Mth.clamp(velocity, -maxSpeed, maxSpeed);
     }
