@@ -1,3 +1,12 @@
+Delta Utility Mod v1.2.1
+Small fix release.
+
+Fixes
+
+* The selection outline no longer lingers after stopping AutoMine or AutoFill (including when you finish mining the area by hand afterward). Stopping now hides the outline while keeping the selection, so `/automine start` can still reuse it; setting a position or starting a job shows the outline again.
+
+---
+
 Delta Utility Mod v1.2.0
 This update makes AutoMine truly autonomous: it can now empty its own inventory into a chest, collect its drops, mine only the blocks you want, and light the area as it goes.
 
