@@ -1,0 +1,12 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "com.delta.utilitymod.mixin",
+  "compatibilityLevel": "JAVA_21",
+  "client": [
+    "MinecraftFrameMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}

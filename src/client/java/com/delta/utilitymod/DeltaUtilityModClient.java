@@ -107,16 +107,22 @@ public class DeltaUtilityModClient implements ClientModInitializer {
     private static double sweepBestDistance = Double.MAX_VALUE;
     private static final Set<Integer> sweepSkippedDrops = new HashSet<>();
 
-    // Camera control
-    private static final float TURN_SPEED_WORK = 15.0F;  // deg/tick while mining/placing
-    private static final float TURN_SPEED_WALK = 21.0F;  // deg/tick while walking
+    // Camera control. Ticks decide WHERE to look (targets); a render-loop mixin
+    // moves the view toward the target every FRAME, so motion is fluid at any fps.
+    private static final float TURN_SPEED_WORK = 15.0F;  // deg/tick cap while mining/placing
+    private static final float TURN_SPEED_WALK = 21.0F;  // deg/tick cap while walking
     private static final float AIM_THRESHOLD_DEG = 30.0F;
-    private static float yawVelocity = 0.0F;
-    private static float pitchVelocity = 0.0F;
-    private static int lastFaceTick = Integer.MIN_VALUE;
+    private static float cameraTargetYaw = 0.0F;
+    private static float cameraTargetPitch = 0.0F;
+    private static float cameraMaxSpeed = 300.0F;        // deg/sec, derived from the caps
+    private static int cameraTargetSetTick = Integer.MIN_VALUE;
+    private static boolean cameraHasTarget = false;
+    private static float frameYawVelocity = 0.0F;
+    private static float framePitchVelocity = 0.0F;
+    private static long lastFrameNanos = 0L;
+    private static long cameraYieldUntilNanos = 0L;
     private static float expectedYaw = Float.NaN;
     private static float expectedPitch = Float.NaN;
-    private static int cameraYieldTicks = 0;
     private static BlockPos lastAimTarget = null;
     private static int aimTicks = 0;
 
@@ -2289,68 +2295,81 @@ public class DeltaUtilityModClient implements ClientModInitializer {
     }
 
     /**
-     * Camera core. Velocity-based easing: the turn rate accelerates toward
-     * 40% of the remaining angle (capped at maxStep) and never overshoots,
-     * giving an ease-in / ease-out arc with no velocity jumps between ticks.
-     * The renderer interpolates rotation across each tick, so the result is
-     * fluid at any framerate.
-     *
-     * If the player's rotation isn't where we left it, the user moved their
-     * mouse: the bot yields the camera entirely for a moment instead of
-     * fighting them for it.
+     * Records where the camera should aim. The actual rotation happens in
+     * {@link #onRenderFrame} every frame; targets expire after 2 ticks so the
+     * camera stops cleanly when no code is steering it.
      */
     private static void faceAngles(Minecraft client, float desiredYaw, float desiredPitch, float maxStep) {
-        int now = client.player.tickCount;
-        if (now - lastFaceTick > 2) {
-            // We haven't controlled the camera recently: start from rest.
-            yawVelocity = 0.0F;
-            pitchVelocity = 0.0F;
-            expectedYaw = Float.NaN;
-        }
-        lastFaceTick = now;
+        cameraTargetYaw = desiredYaw;
+        cameraTargetPitch = desiredPitch;
+        cameraMaxSpeed = maxStep * 20.0F;
+        cameraTargetSetTick = client.player.tickCount;
+        cameraHasTarget = true;
+    }
 
-        if (!Float.isNaN(expectedYaw)) {
-            float userMoved = Math.abs(Mth.wrapDegrees(client.player.getYRot() - expectedYaw))
-                    + Math.abs(client.player.getXRot() - expectedPitch);
-            // Threshold generous enough that server rotation nudges don't
-            // false-trigger and freeze the camera mid-motion.
-            if (userMoved > 4.0F) {
-                cameraYieldTicks = 10;
-                yawVelocity = 0.0F;
-                pitchVelocity = 0.0F;
-            }
+    /**
+     * Per-frame camera update, called from the render-loop mixin. A critically
+     * damped spring turns the view toward the current target: velocity is
+     * continuous across frames (no 20 Hz stepping), eases in and out, and
+     * cannot oscillate. Rotation is applied through Entity.turn - the same
+     * path as real mouse input - so there is no interpolation lag.
+     *
+     * If the rotation isn't where we left it last frame, the user moved their
+     * mouse: the bot yields the camera for half a second instead of fighting.
+     */
+    public static void onRenderFrame(Minecraft client) {
+        long now = System.nanoTime();
+        float dt = lastFrameNanos == 0L ? 0.016F : Mth.clamp((now - lastFrameNanos) / 1.0e9F, 0.0F, 0.05F);
+        lastFrameNanos = now;
+
+        if (client == null || client.player == null || !running || client.isPaused()) {
+            frameYawVelocity = 0.0F;
+            framePitchVelocity = 0.0F;
+            expectedYaw = Float.NaN;
+            return;
         }
-        if (cameraYieldTicks > 0) {
-            cameraYieldTicks--;
+        if (!cameraHasTarget || client.player.tickCount - cameraTargetSetTick > 2) {
+            cameraHasTarget = false;
+            frameYawVelocity = 0.0F;
+            framePitchVelocity = 0.0F;
             expectedYaw = Float.NaN;
             return;
         }
 
-        float yawError = Mth.wrapDegrees(desiredYaw - client.player.getYRot());
-        float pitchError = Mth.wrapDegrees(desiredPitch - client.player.getXRot());
+        if (!Float.isNaN(expectedYaw)) {
+            float userMoved = Math.abs(Mth.wrapDegrees(client.player.getYRot() - expectedYaw))
+                    + Math.abs(client.player.getXRot() - expectedPitch);
+            if (userMoved > 1.5F) {
+                cameraYieldUntilNanos = now + 500_000_000L;
+                frameYawVelocity = 0.0F;
+                framePitchVelocity = 0.0F;
+            }
+        }
+        if (now < cameraYieldUntilNanos) {
+            expectedYaw = Float.NaN;
+            return;
+        }
 
-        yawVelocity = approachVelocity(yawVelocity, yawError, maxStep);
-        pitchVelocity = approachVelocity(pitchVelocity, pitchError, maxStep);
+        float yawError = Mth.wrapDegrees(cameraTargetYaw - client.player.getYRot());
+        float pitchError = Mth.wrapDegrees(cameraTargetPitch - client.player.getXRot());
 
-        float newYaw = client.player.getYRot() + yawVelocity;
-        float newPitch = Mth.clamp(client.player.getXRot() + pitchVelocity, -90.0F, 90.0F);
-        client.player.setYRot(newYaw);
-        client.player.setXRot(newPitch);
-        expectedYaw = newYaw;
-        expectedPitch = newPitch;
+        frameYawVelocity = springVelocity(frameYawVelocity, yawError, dt, cameraMaxSpeed);
+        framePitchVelocity = springVelocity(framePitchVelocity, pitchError, dt, cameraMaxSpeed);
+
+        double deltaYaw = frameYawVelocity * dt;
+        double deltaPitch = framePitchVelocity * dt;
+        // Entity.turn uses cursor semantics (input * 0.15) and updates both the
+        // current and previous-frame rotation, exactly like real mouse input.
+        client.player.turn(deltaYaw / 0.15D, deltaPitch / 0.15D);
+        expectedYaw = client.player.getYRot();
+        expectedPitch = client.player.getXRot();
     }
 
-    private static float approachVelocity(float velocity, float error, float maxStep) {
-        // Chase a velocity proportional to the remaining angle. No hard brake at
-        // the endpoint: motion is allowed to glide through with a touch of
-        // overshoot and correct itself, which flows between targets instead of
-        // stopping dead on each one.
-        float targetVelocity = Mth.clamp(error * 0.38F, -maxStep, maxStep);
-        velocity += (targetVelocity - velocity) * 0.55F;
-        if (Math.abs(error) < 0.35F && Math.abs(velocity) < 0.8F) {
-            return error; // settled: lock on exactly
-        }
-        return velocity;
+    /** Critically damped spring step: smooth ease-in/ease-out, no oscillation. */
+    private static float springVelocity(float velocity, float error, float dt, float maxSpeed) {
+        float omega = 8.0F;
+        velocity += (error * omega * omega - 2.0F * omega * velocity) * dt;
+        return Mth.clamp(velocity, -maxSpeed, maxSpeed);
     }
 
     private static float yawToward(Minecraft client, Vec3 target) {
@@ -2383,7 +2402,7 @@ public class DeltaUtilityModClient implements ClientModInitializer {
             lastAimTarget = pos.immutable();
             aimTicks = 0;
         }
-        if (cameraYieldTicks > 0) {
+        if (System.nanoTime() < cameraYieldUntilNanos) {
             return false;
         }
         if (angularErrorTo(client, centerOf(pos)) <= AIM_THRESHOLD_DEG || aimTicks >= maxWaitTicks) {
@@ -2394,11 +2413,12 @@ public class DeltaUtilityModClient implements ClientModInitializer {
     }
 
     private static void resetCameraState() {
-        yawVelocity = 0.0F;
-        pitchVelocity = 0.0F;
+        cameraHasTarget = false;
+        frameYawVelocity = 0.0F;
+        framePitchVelocity = 0.0F;
         expectedYaw = Float.NaN;
         expectedPitch = Float.NaN;
-        cameraYieldTicks = 0;
+        cameraYieldUntilNanos = 0L;
         lastAimTarget = null;
         aimTicks = 0;
     }

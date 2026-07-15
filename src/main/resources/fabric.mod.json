@@ -7,6 +7,12 @@
   "contact": {},
   "license": "MIT",
   "environment": "client",
+  "mixins": [
+    {
+      "config": "delta_utility_mod.mixins.json",
+      "environment": "client"
+    }
+  ],
   "entrypoints": {
     "client": [
       "com.delta.utilitymod.DeltaUtilityModClient"
