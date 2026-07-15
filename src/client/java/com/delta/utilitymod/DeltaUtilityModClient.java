@@ -108,8 +108,8 @@ public class DeltaUtilityModClient implements ClientModInitializer {
     private static final Set<Integer> sweepSkippedDrops = new HashSet<>();
 
     // Camera control
-    private static final float TURN_SPEED_WORK = 11.0F;  // deg/tick while mining/placing
-    private static final float TURN_SPEED_WALK = 14.0F;  // deg/tick while walking
+    private static final float TURN_SPEED_WORK = 15.0F;  // deg/tick while mining/placing
+    private static final float TURN_SPEED_WALK = 21.0F;  // deg/tick while walking
     private static final float AIM_THRESHOLD_DEG = 30.0F;
     private static float yawVelocity = 0.0F;
     private static float pitchVelocity = 0.0F;
@@ -1419,7 +1419,7 @@ public class DeltaUtilityModClient implements ClientModInitializer {
         // looks down the path instead of nodding at each waypoint underfoot.
         DeltaPathfinder.Step next = path.get(Math.min(path.size() - 1, pathIndex + 1));
         double blend = next.feet.getY() < step.feet.getY() ? 0.0D
-                : Mth.clamp(1.0D - horizontal / 1.4D, 0.0D, 0.5D);
+                : Mth.clamp(1.0D - horizontal / 1.9D, 0.0D, 0.5D);
         Vec3 steerPoint = new Vec3(
                 Mth.lerp(blend, waypoint.x, next.feet.getX() + 0.5D),
                 waypoint.y,
@@ -2345,8 +2345,8 @@ public class DeltaUtilityModClient implements ClientModInitializer {
         // the endpoint: motion is allowed to glide through with a touch of
         // overshoot and correct itself, which flows between targets instead of
         // stopping dead on each one.
-        float targetVelocity = Mth.clamp(error * 0.32F, -maxStep, maxStep);
-        velocity += (targetVelocity - velocity) * 0.45F;
+        float targetVelocity = Mth.clamp(error * 0.38F, -maxStep, maxStep);
+        velocity += (targetVelocity - velocity) * 0.55F;
         if (Math.abs(error) < 0.35F && Math.abs(velocity) < 0.8F) {
             return error; // settled: lock on exactly
         }
