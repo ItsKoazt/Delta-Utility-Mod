@@ -1388,16 +1388,23 @@ public class DeltaUtilityModClient implements ClientModInitializer {
         Vec3 waypoint = new Vec3(step.feet.getX() + 0.5D, step.feet.getY() + 0.9D, step.feet.getZ() + 0.5D);
         Vec3 playerPos = client.player.position();
 
-        // Steer (yaw) toward the immediate waypoint, but keep the eyes (pitch)
-        // on a point a few waypoints ahead so the camera looks down the path
-        // instead of nodding at each waypoint underfoot.
-        DeltaPathfinder.Step ahead = path.get(Math.min(path.size() - 1, pathIndex + 3));
-        Vec3 lookAhead = new Vec3(ahead.feet.getX() + 0.5D, ahead.feet.getY() + 1.55D, ahead.feet.getZ() + 0.5D);
-        faceAngles(client, yawToward(client, waypoint), pitchToward(client, lookAhead), TURN_SPEED_WALK);
-
         double dx = waypoint.x - playerPos.x;
         double dz = waypoint.z - playerPos.z;
         double horizontal = Math.sqrt(dx * dx + dz * dz);
+
+        // Steer (yaw) toward the immediate waypoint, blending toward the next
+        // one as we get close so corners round off instead of stop-turn-go.
+        // Keep the eyes (pitch) on a point a few waypoints ahead so the camera
+        // looks down the path instead of nodding at each waypoint underfoot.
+        DeltaPathfinder.Step next = path.get(Math.min(path.size() - 1, pathIndex + 1));
+        double blend = Mth.clamp(1.0D - horizontal / 1.6D, 0.0D, 0.65D);
+        Vec3 steerPoint = new Vec3(
+                Mth.lerp(blend, waypoint.x, next.feet.getX() + 0.5D),
+                waypoint.y,
+                Mth.lerp(blend, waypoint.z, next.feet.getZ() + 0.5D));
+        DeltaPathfinder.Step ahead = path.get(Math.min(path.size() - 1, pathIndex + 3));
+        Vec3 lookAhead = new Vec3(ahead.feet.getX() + 0.5D, ahead.feet.getY() + 1.55D, ahead.feet.getZ() + 0.5D);
+        faceAngles(client, yawToward(client, steerPoint), pitchToward(client, lookAhead), TURN_SPEED_WALK);
 
         client.options.keyUp.setDown(horizontal > 0.08D);
         client.options.keyDown.setDown(false);
@@ -2236,8 +2243,10 @@ public class DeltaUtilityModClient implements ClientModInitializer {
         if (!Float.isNaN(expectedYaw)) {
             float userMoved = Math.abs(Mth.wrapDegrees(client.player.getYRot() - expectedYaw))
                     + Math.abs(client.player.getXRot() - expectedPitch);
-            if (userMoved > 2.5F) {
-                cameraYieldTicks = 12;
+            // Threshold generous enough that server rotation nudges don't
+            // false-trigger and freeze the camera mid-motion.
+            if (userMoved > 4.0F) {
+                cameraYieldTicks = 10;
                 yawVelocity = 0.0F;
                 pitchVelocity = 0.0F;
             }
@@ -2263,13 +2272,14 @@ public class DeltaUtilityModClient implements ClientModInitializer {
     }
 
     private static float approachVelocity(float velocity, float error, float maxStep) {
-        if (Math.abs(error) < 0.15F) {
-            return error; // settle exactly
-        }
-        float targetVelocity = Mth.clamp(error * 0.4F, -maxStep, maxStep);
-        velocity += (targetVelocity - velocity) * 0.5F;
-        if (Math.abs(velocity) > Math.abs(error)) {
-            velocity = error; // never swing past the target
+        // Chase a velocity proportional to the remaining angle. No hard brake at
+        // the endpoint: motion is allowed to glide through with a touch of
+        // overshoot and correct itself, which flows between targets instead of
+        // stopping dead on each one.
+        float targetVelocity = Mth.clamp(error * 0.32F, -maxStep, maxStep);
+        velocity += (targetVelocity - velocity) * 0.45F;
+        if (Math.abs(error) < 0.35F && Math.abs(velocity) < 0.8F) {
+            return error; // settled: lock on exactly
         }
         return velocity;
     }
