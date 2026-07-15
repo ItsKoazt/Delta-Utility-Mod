@@ -21,12 +21,19 @@ import net.minecraft.network.chat.Component;
 import net.minecraft.resources.Identifier;
 import net.minecraft.tags.FluidTags;
 import net.minecraft.util.Mth;
+import net.minecraft.world.Container;
 import net.minecraft.world.InteractionHand;
+import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.inventory.ContainerInput;
+import net.minecraft.world.inventory.Slot;
 import net.minecraft.world.item.BlockItem;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.Items;
+import net.minecraft.world.level.LightLayer;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.FallingBlock;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.BlockHitResult;
@@ -56,6 +63,9 @@ public class DeltaUtilityModClient implements ClientModInitializer {
 
     private enum JobMode { MINE, FILL }
 
+    /** Sub-phase of a running mining job. */
+    private enum MinePhase { WORK, GOTO_CHEST, DEPOSIT, SWEEP }
+
     // Selection + work queue
     private static BlockPos pos1;
     private static BlockPos pos2;
@@ -76,6 +86,20 @@ public class DeltaUtilityModClient implements ClientModInitializer {
     private static Block fillBlock = Blocks.AIR;
     private static String fillBlockName = "air";
     private static int placeCooldown = 0;
+    private static boolean fillReplace = false;
+
+    // Mining phases (chest deposit + drop sweep)
+    private static MinePhase minePhase = MinePhase.WORK;
+    private static int phaseTicks = 0;
+    private static int depositClickCooldown = 0;
+    private static BlockPos depositChest = null;
+
+    // Block filter (session-scoped, cleared on game restart)
+    private static final Set<Block> filterBlocks = new HashSet<>();
+    private static boolean filterInclude = false;
+
+    // Torch placement
+    private static int torchCooldown = 0;
 
     // Settings (persisted)
     private static boolean selectionOutlineEnabled = true;
@@ -89,6 +113,8 @@ public class DeltaUtilityModClient implements ClientModInitializer {
     private static double moveStopRange = 3.8D;
     private static int minToolDurability = 25;
     private static int pauseHealth = 6; // health points out of 20; 0 disables
+    private static boolean autoTorch = false;
+    private static boolean hudEnabled = true;
 
     // Safety state
     private static boolean lowHealthTriggered = false;
@@ -176,9 +202,11 @@ public class DeltaUtilityModClient implements ClientModInitializer {
                                 "§f/pos1§7, §f/pos2 §7- select the area you are looking at",
                                 "§f/automine start|pause|resume|stop|reset|status",
                                 "§f/automine range|moverange|delay|hunger|health|mindurability <n>",
-                                "§f/automine move|tools|eat|lavasafety <true|false>",
+                                "§f/automine move|tools|eat|lavasafety|torch|hud <true|false>",
+                                "§f/automine chest §7- deposit inventory into the chest you're looking at",
+                                "§f/automine filter add|remove|list|clear|mode §7- choose which blocks to mine",
                                 "§7Keybinds (see Controls): set pos1/pos2, start/pause, stop",
-                                "§f/autofill start <block>§7, §fpause|resume|stop|reset|status",
+                                "§f/autofill start <block> [replace]§7, §fpause|resume|stop|reset|status",
                                 "§f/delta outline on|off §7- selection outline particles")));
                         return 1;
                     }))
@@ -196,8 +224,11 @@ public class DeltaUtilityModClient implements ClientModInitializer {
 
             dispatcher.register(ClientCommands.literal("autofill")
                     .then(ClientCommands.literal("start")
-                            .then(ClientCommands.argument("block", StringArgumentType.word()).executes(context ->
-                                    startFill(context.getSource(), StringArgumentType.getString(context, "block")))))
+                            .then(ClientCommands.argument("block", StringArgumentType.word())
+                                    .executes(context ->
+                                            startFill(context.getSource(), StringArgumentType.getString(context, "block"), false))
+                                    .then(ClientCommands.literal("replace").executes(context ->
+                                            startFill(context.getSource(), StringArgumentType.getString(context, "block"), true)))))
                     .then(ClientCommands.literal("pause").executes(context -> {
                         if (!running || jobMode != JobMode.FILL) {
                             context.getSource().sendFeedback(Component.literal("§cAutoFill is not running."));
@@ -317,6 +348,92 @@ public class DeltaUtilityModClient implements ClientModInitializer {
                                 context.getSource().sendFeedback(Component.literal("§aAutoMine lava safety set to §f" + lavaSafety));
                                 return 1;
                             })))
+                    .then(ClientCommands.literal("torch")
+                            .then(ClientCommands.argument("enabled", BoolArgumentType.bool()).executes(context -> {
+                                setAutoTorchEnabled(BoolArgumentType.getBool(context, "enabled"));
+                                context.getSource().sendFeedback(Component.literal("§aAutoMine torch placement set to §f" + autoTorch));
+                                return 1;
+                            })))
+                    .then(ClientCommands.literal("hud")
+                            .then(ClientCommands.argument("enabled", BoolArgumentType.bool()).executes(context -> {
+                                setHudEnabled(BoolArgumentType.getBool(context, "enabled"));
+                                context.getSource().sendFeedback(Component.literal("§aStatus HUD set to §f" + hudEnabled));
+                                return 1;
+                            })))
+                    .then(ClientCommands.literal("chest")
+                            .executes(context -> {
+                                BlockPos lookingAt = getLookingAtBlock();
+                                Minecraft client = Minecraft.getInstance();
+                                if (lookingAt == null || client.level == null
+                                        || !(client.level.getBlockEntity(lookingAt) instanceof Container)) {
+                                    context.getSource().sendFeedback(Component.literal("§cLook at a chest (or barrel) and run /automine chest."));
+                                    return 0;
+                                }
+                                depositChest = lookingAt.immutable();
+                                context.getSource().sendFeedback(Component.literal("§aDeposit chest set to §f" + format(depositChest)
+                                        + "§a. AutoMine will empty its inventory there when full."));
+                                return 1;
+                            })
+                            .then(ClientCommands.literal("clear").executes(context -> {
+                                depositChest = null;
+                                context.getSource().sendFeedback(Component.literal("§eDeposit chest cleared. AutoMine will pause when the inventory is full."));
+                                return 1;
+                            })))
+                    .then(ClientCommands.literal("filter")
+                            .then(ClientCommands.literal("add")
+                                    .then(ClientCommands.argument("block", StringArgumentType.word()).executes(context -> {
+                                        Block block = resolveBlock(StringArgumentType.getString(context, "block"));
+                                        if (block == null) {
+                                            context.getSource().sendFeedback(Component.literal("§cUnknown block: §f" + StringArgumentType.getString(context, "block")));
+                                            return 0;
+                                        }
+                                        filterBlocks.add(block);
+                                        context.getSource().sendFeedback(Component.literal("§aFilter now has §f" + filterBlocks.size()
+                                                + "§a block(s), mode: §f" + (filterInclude ? "include (mine only these)" : "exclude (mine everything but these)")));
+                                        return 1;
+                                    })))
+                            .then(ClientCommands.literal("remove")
+                                    .then(ClientCommands.argument("block", StringArgumentType.word()).executes(context -> {
+                                        Block block = resolveBlock(StringArgumentType.getString(context, "block"));
+                                        if (block == null || !filterBlocks.remove(block)) {
+                                            context.getSource().sendFeedback(Component.literal("§cThat block is not in the filter."));
+                                            return 0;
+                                        }
+                                        context.getSource().sendFeedback(Component.literal("§aRemoved. Filter now has §f" + filterBlocks.size() + "§a block(s)."));
+                                        return 1;
+                                    })))
+                            .then(ClientCommands.literal("mode")
+                                    .then(ClientCommands.literal("include").executes(context -> {
+                                        filterInclude = true;
+                                        context.getSource().sendFeedback(Component.literal("§aFilter mode: §finclude §7- only listed blocks are mined."));
+                                        return 1;
+                                    }))
+                                    .then(ClientCommands.literal("exclude").executes(context -> {
+                                        filterInclude = false;
+                                        context.getSource().sendFeedback(Component.literal("§aFilter mode: §fexclude §7- listed blocks are skipped."));
+                                        return 1;
+                                    })))
+                            .then(ClientCommands.literal("list").executes(context -> {
+                                if (filterBlocks.isEmpty()) {
+                                    context.getSource().sendFeedback(Component.literal("§7Filter is empty: all blocks are mined."));
+                                    return 1;
+                                }
+                                StringBuilder names = new StringBuilder();
+                                for (Block block : filterBlocks) {
+                                    if (names.length() > 0) {
+                                        names.append("§7, §f");
+                                    }
+                                    Object key = BuiltInRegistries.BLOCK.getKey(block);
+                                    names.append(key == null ? "?" : key.toString());
+                                }
+                                context.getSource().sendFeedback(Component.literal("§bFilter (" + (filterInclude ? "include" : "exclude") + "): §f" + names));
+                                return 1;
+                            }))
+                            .then(ClientCommands.literal("clear").executes(context -> {
+                                filterBlocks.clear();
+                                context.getSource().sendFeedback(Component.literal("§eFilter cleared: all blocks will be mined."));
+                                return 1;
+                            })))
                     .then(ClientCommands.literal("health")
                             .then(ClientCommands.argument("level", IntegerArgumentType.integer(0, 19)).executes(context -> {
                                 setPauseHealth(IntegerArgumentType.getInteger(context, "level"));
@@ -379,9 +496,13 @@ public class DeltaUtilityModClient implements ClientModInitializer {
         lavaSkippedCount = 0;
         lowHealthTriggered = false;
         wasInventoryFull = false;
+        minePhase = MinePhase.WORK;
+        phaseTicks = 0;
         delayedMineTargets.clear();
         resetPath();
-        return "§aAutoMine started. Blocks queued: §f" + queue.size();
+        String filterNote = filterBlocks.isEmpty() ? "" : " §7(filter active: " + filterBlocks.size() + " block(s), "
+                + (filterInclude ? "include" : "exclude") + " mode)";
+        return "§aAutoMine started. Blocks queued: §f" + queue.size() + filterNote;
     }
 
     private static void pauseJob() {
@@ -435,12 +556,18 @@ public class DeltaUtilityModClient implements ClientModInitializer {
             stopJob();
             return;
         }
+
+        tickHud(client);
+
         if (paused) {
             return;
         }
 
         if (jumpCooldownTicks > 0) {
             jumpCooldownTicks--;
+        }
+        if (torchCooldown > 0) {
+            torchCooldown--;
         }
         if (placeCooldown > 0) {
             placeCooldown--;
@@ -469,7 +596,10 @@ public class DeltaUtilityModClient implements ClientModInitializer {
         if (checkHealthSafety(client)) {
             return;
         }
-        if (jobMode == JobMode.MINE && checkInventoryFull(client)) {
+        if (dodgeFallingBlocks(client)) {
+            return;
+        }
+        if (jobMode == JobMode.MINE && minePhase == MinePhase.WORK && checkInventoryFull(client)) {
             return;
         }
 
@@ -478,6 +608,45 @@ public class DeltaUtilityModClient implements ClientModInitializer {
         } else {
             onMineTick(client);
         }
+    }
+
+    private static void tickHud(Minecraft client) {
+        if (!hudEnabled || client.player.tickCount % 20 != 0) {
+            return;
+        }
+        int blocksLeft = getBlocksLeft();
+        String phase;
+        if (paused) {
+            phase = "Paused";
+        } else if (minePhase == MinePhase.GOTO_CHEST) {
+            phase = "To chest";
+        } else if (minePhase == MinePhase.DEPOSIT) {
+            phase = "Depositing";
+        } else if (minePhase == MinePhase.SWEEP) {
+            phase = "Collecting drops";
+        } else {
+            phase = jobMode == JobMode.FILL ? "Filling" : "Mining";
+        }
+        client.player.sendOverlayMessage(Component.literal("§b" + jobLabel() + " §7- §f" + phase
+                + " §7| §f" + blocksLeft + " §7left §7| §f" + formatProgress(blocksLeft)
+                + " §7| ETA §f" + formatEta(blocksLeft)));
+    }
+
+    /** Sidesteps when gravel/sand hangs unsupported above the player's head. */
+    private static boolean dodgeFallingBlocks(Minecraft client) {
+        if (client.player.tickCount % 5 != 0) {
+            return false;
+        }
+        BlockPos feet = client.player.blockPosition();
+        for (int dy = 2; dy <= 4; dy++) {
+            BlockPos above = feet.above(dy);
+            if (client.level.getBlockState(above).getBlock() instanceof FallingBlock
+                    && client.level.getBlockState(above.below()).isAir()) {
+                stepAside(client, feet);
+                return true;
+            }
+        }
+        return false;
     }
 
     private static void handleKeyMappings(Minecraft client) {
@@ -535,24 +704,25 @@ public class DeltaUtilityModClient implements ClientModInitializer {
         return false;
     }
 
-    /** Pauses mining when the inventory has no free slot left, so drops don't despawn. */
+    /** When the inventory fills up: head to the deposit chest if one is set, otherwise pause. */
     private static boolean checkInventoryFull(Minecraft client) {
         if (client.player.tickCount % 20 != 0) {
             return false;
         }
-        boolean full = true;
-        int size = Math.min(36, client.player.getInventory().getContainerSize());
-        for (int slot = 0; slot < size; slot++) {
-            if (client.player.getInventory().getItem(slot).isEmpty()) {
-                full = false;
-                break;
-            }
-        }
+        boolean full = isInventoryFullNow(client);
         if (full && !wasInventoryFull) {
             wasInventoryFull = true;
+            if (depositChest != null) {
+                minePhase = MinePhase.GOTO_CHEST;
+                phaseTicks = 0;
+                resetPath();
+                client.player.sendSystemMessage(Component.literal(
+                        "§bAutoMine: inventory full, heading to the deposit chest."));
+                return true;
+            }
             pauseJob();
             client.player.sendSystemMessage(Component.literal(
-                    "§eAutoMine paused: inventory is full. Make room, then use §f/automine resume§e."));
+                    "§eAutoMine paused: inventory is full. Make room, then use §f/automine resume§e. Tip: set a deposit chest with §f/automine chest§e."));
             return true;
         }
         if (!full) {
@@ -561,11 +731,34 @@ public class DeltaUtilityModClient implements ClientModInitializer {
         return false;
     }
 
+    private static boolean isInventoryFullNow(Minecraft client) {
+        int size = Math.min(36, client.player.getInventory().getContainerSize());
+        for (int slot = 0; slot < size; slot++) {
+            if (client.player.getInventory().getItem(slot).isEmpty()) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     // ------------------------------------------------------------------
     // Mining
     // ------------------------------------------------------------------
 
     private static void onMineTick(Minecraft client) {
+        if (minePhase == MinePhase.GOTO_CHEST) {
+            tickGotoChest(client);
+            return;
+        }
+        if (minePhase == MinePhase.DEPOSIT) {
+            tickDeposit(client);
+            return;
+        }
+        if (minePhase == MinePhase.SWEEP) {
+            tickSweep(client);
+            return;
+        }
+
         targetTicks++;
 
         if (currentTarget == null || !isMineable(client, currentTarget)) {
@@ -579,11 +772,20 @@ public class DeltaUtilityModClient implements ClientModInitializer {
                 selectNewMineTarget(client);
             }
             if (currentTarget == null) {
-                finishJob(client, lavaSkippedCount > 0
-                        ? "§aAutoMine finished. Skipped §f" + lavaSkippedCount + " §alava-adjacent block(s) for safety. Selection cleared."
-                        : "§aAutoMine finished. Full area checked. Selection cleared.");
+                if (findNearestDrop(client) != null) {
+                    minePhase = MinePhase.SWEEP;
+                    phaseTicks = 0;
+                    resetPath();
+                    client.player.sendSystemMessage(Component.literal("§bAutoMine: area cleared, collecting drops..."));
+                    return;
+                }
+                finishMineJob(client);
                 return;
             }
+        }
+
+        if (breakTicksOnTarget == 0) {
+            tryPlaceTorch(client);
         }
 
         boolean inBreakRange = withinRange(client, currentTarget, maxRange);
@@ -660,6 +862,218 @@ public class DeltaUtilityModClient implements ClientModInitializer {
         if (targetTicks > 260 && currentTarget != null) {
             deferCurrentTarget(client);
         }
+    }
+
+    private static void finishMineJob(Minecraft client) {
+        finishJob(client, lavaSkippedCount > 0
+                ? "§aAutoMine finished. Skipped §f" + lavaSkippedCount + " §alava-adjacent block(s) for safety. Selection cleared."
+                : "§aAutoMine finished. Full area checked. Selection cleared.");
+    }
+
+    // ------------------------------------------------------------------
+    // Chest deposit
+    // ------------------------------------------------------------------
+
+    private static void tickGotoChest(Minecraft client) {
+        phaseTicks++;
+
+        if (depositChest == null || !(client.level.getBlockEntity(depositChest) instanceof Container)) {
+            minePhase = MinePhase.WORK;
+            pauseJob();
+            client.player.sendSystemMessage(Component.literal(
+                    "§eAutoMine paused: the deposit chest is gone. Set a new one with §f/automine chest§e, make room, then resume."));
+            return;
+        }
+        if (phaseTicks > 600) {
+            minePhase = MinePhase.WORK;
+            pauseJob();
+            client.player.sendSystemMessage(Component.literal(
+                    "§eAutoMine paused: couldn't reach the deposit chest. Make room manually, then resume."));
+            return;
+        }
+
+        if (!withinRange(client, depositChest, Math.max(1.5D, maxRange - 0.5D))) {
+            if (!autoMove) {
+                minePhase = MinePhase.WORK;
+                pauseJob();
+                client.player.sendSystemMessage(Component.literal(
+                        "§eAutoMine paused: inventory full and Auto Move is off. Empty your inventory, then resume."));
+                return;
+            }
+            travelToward(client, depositChest, false);
+            return;
+        }
+
+        releaseMovementKeys(client);
+        resetPath();
+        faceSmooth(client, centerOf(depositChest), 60.0F);
+
+        if (client.player.containerMenu.containerId == 0) {
+            if (phaseTicks % 10 == 1) {
+                BlockHitResult hit = new BlockHitResult(
+                        Vec3.atCenterOf(depositChest), getHitDirection(client, depositChest), depositChest, false);
+                client.gameMode.useItemOn(client.player, InteractionHand.MAIN_HAND, hit);
+                client.player.swing(InteractionHand.MAIN_HAND);
+            }
+            return;
+        }
+
+        minePhase = MinePhase.DEPOSIT;
+        phaseTicks = 0;
+        depositClickCooldown = 4;
+    }
+
+    private static void tickDeposit(Minecraft client) {
+        phaseTicks++;
+
+        if (client.player.containerMenu.containerId == 0) {
+            finishDeposit(client);
+            return;
+        }
+        if (phaseTicks > 400) {
+            client.player.closeContainer();
+            finishDeposit(client);
+            return;
+        }
+        if (depositClickCooldown > 0) {
+            depositClickCooldown--;
+            return;
+        }
+
+        var menu = client.player.containerMenu;
+        for (int i = 0; i < menu.slots.size(); i++) {
+            Slot slot = menu.slots.get(i);
+            if (slot.container != client.player.getInventory()) {
+                continue;
+            }
+            ItemStack stack = slot.getItem();
+            if (stack.isEmpty() || shouldKeepItem(stack)) {
+                continue;
+            }
+            client.gameMode.handleContainerInput(menu.containerId, i, 0, ContainerInput.QUICK_MOVE, client.player);
+            depositClickCooldown = 2;
+            return;
+        }
+
+        client.player.closeContainer();
+        finishDeposit(client);
+    }
+
+    private static void finishDeposit(Minecraft client) {
+        minePhase = MinePhase.WORK;
+        phaseTicks = 0;
+        boolean stillFull = isInventoryFullNow(client);
+        wasInventoryFull = stillFull;
+        if (stillFull) {
+            pauseJob();
+            client.player.sendSystemMessage(Component.literal(
+                    "§eAutoMine paused: the deposit chest is full (or items wouldn't fit). Make room, then use §f/automine resume§e."));
+        } else {
+            client.player.sendSystemMessage(Component.literal("§aItems deposited. Back to mining."));
+        }
+    }
+
+    /** Items the bot never deposits: tools/armor, food, and torches. */
+    private static boolean shouldKeepItem(ItemStack stack) {
+        return stack.isDamageableItem() || isFoodStack(stack) || stack.is(Items.TORCH);
+    }
+
+    // ------------------------------------------------------------------
+    // Drop sweep
+    // ------------------------------------------------------------------
+
+    private static void tickSweep(Minecraft client) {
+        phaseTicks++;
+
+        if (phaseTicks > 600) {
+            finishMineJob(client);
+            return;
+        }
+        ItemEntity drop = findNearestDrop(client);
+        if (drop == null) {
+            finishMineJob(client);
+            return;
+        }
+        if (!autoMove) {
+            finishMineJob(client);
+            return;
+        }
+
+        BlockPos dropPos = drop.blockPosition();
+        if (!travelToward(client, dropPos, false)) {
+            // Within break range already: walk the last few meters directly.
+            legacyMoveTowardTarget(client, dropPos, false);
+        }
+    }
+
+    private static ItemEntity findNearestDrop(Minecraft client) {
+        if (pos1 == null || pos2 == null) {
+            return null;
+        }
+        AABB bounds = new AABB(
+                Math.min(pos1.getX(), pos2.getX()), Math.min(pos1.getY(), pos2.getY()), Math.min(pos1.getZ(), pos2.getZ()),
+                Math.max(pos1.getX(), pos2.getX()) + 1, Math.max(pos1.getY(), pos2.getY()) + 1, Math.max(pos1.getZ(), pos2.getZ()) + 1
+        ).inflate(4.0D);
+
+        ItemEntity best = null;
+        double bestDistance = Double.MAX_VALUE;
+        for (Entity entity : client.level.entitiesForRendering()) {
+            if (!(entity instanceof ItemEntity item) || item.getItem().isEmpty()) {
+                continue;
+            }
+            if (!bounds.contains(item.position())) {
+                continue;
+            }
+            double distance = item.position().distanceToSqr(client.player.position());
+            if (distance < bestDistance) {
+                bestDistance = distance;
+                best = item;
+            }
+        }
+        return best;
+    }
+
+    // ------------------------------------------------------------------
+    // Torch placement
+    // ------------------------------------------------------------------
+
+    private static void tryPlaceTorch(Minecraft client) {
+        if (!autoTorch || torchCooldown > 0 || !client.player.onGround()) {
+            return;
+        }
+        BlockPos feet = client.player.blockPosition();
+        if (client.level.getBrightness(LightLayer.BLOCK, feet) >= 6) {
+            return;
+        }
+        if (!client.level.getBlockState(feet).isAir() || !DeltaPathfinder.solid(client, feet.below())) {
+            return;
+        }
+
+        int slot = findTorchSlot(client);
+        if (slot == -1) {
+            torchCooldown = 200; // no torches; don't rescan every block
+            return;
+        }
+        if (!makeSlotUsable(client, slot)) {
+            torchCooldown = 20;
+            return;
+        }
+
+        BlockPos ground = feet.below();
+        BlockHitResult hit = new BlockHitResult(
+                Vec3.atCenterOf(ground).add(0.0D, 0.5D, 0.0D), Direction.UP, ground, false);
+        client.gameMode.useItemOn(client.player, InteractionHand.MAIN_HAND, hit);
+        client.player.swing(InteractionHand.MAIN_HAND);
+        torchCooldown = 40;
+    }
+
+    private static int findTorchSlot(Minecraft client) {
+        for (int slot = 0; slot < client.player.getInventory().getContainerSize(); slot++) {
+            if (client.player.getInventory().getItem(slot).is(Items.TORCH)) {
+                return slot;
+            }
+        }
+        return -1;
     }
 
     /**
@@ -826,7 +1240,7 @@ public class DeltaUtilityModClient implements ClientModInitializer {
                 reach,
                 allowMining,
                 DeltaUtilityModClient::isInsideSelection,
-                pos -> isMineable(client, pos),
+                pos -> isBreakable(client, pos),
                 3500);
         pathIndex = 0;
         pathTargetKey = target.immutable();
@@ -859,7 +1273,7 @@ public class DeltaUtilityModClient implements ClientModInitializer {
     /** First path-blocker of the current step that still needs breaking, or null. */
     private static BlockPos nextClearBlock(Minecraft client, DeltaPathfinder.Step step) {
         for (BlockPos pos : step.toClear) {
-            if (isMineable(client, pos)) {
+            if (isBreakable(client, pos)) {
                 return pos;
             }
         }
@@ -1157,7 +1571,7 @@ public class DeltaUtilityModClient implements ClientModInitializer {
     // Filling
     // ------------------------------------------------------------------
 
-    private static int startFill(net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource source, String blockName) {
+    private static int startFill(net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource source, String blockName, boolean replace) {
         if (pos1 == null || pos2 == null) {
             source.sendFeedback(Component.literal("§cSet /pos1 and /pos2 first."));
             return 0;
@@ -1177,6 +1591,7 @@ public class DeltaUtilityModClient implements ClientModInitializer {
 
         fillBlock = block;
         fillBlockName = blockName.contains(":") ? blockName : "minecraft:" + blockName;
+        fillReplace = replace;
         buildFillQueue();
         startTaskTracking(queue.size());
         jobMode = JobMode.FILL;
@@ -1188,7 +1603,9 @@ public class DeltaUtilityModClient implements ClientModInitializer {
         lowHealthTriggered = false;
         wasInventoryFull = false;
         resetPath();
-        source.sendFeedback(Component.literal("§aAutoFill started with §f" + fillBlockName + "§a. Blocks queued: §f" + queue.size()));
+        source.sendFeedback(Component.literal(replace
+                ? "§aAutoFill (replace mode) started with §f" + fillBlockName + "§a. §eExisting blocks in the area will be mined and replaced. §aBlocks queued: §f" + queue.size()
+                : "§aAutoFill started with §f" + fillBlockName + "§a. Blocks queued: §f" + queue.size()));
         return 1;
     }
 
@@ -1255,9 +1672,19 @@ public class DeltaUtilityModClient implements ClientModInitializer {
         resetPath();
         faceSmooth(client, centerOf(currentTarget), 60.0F);
 
-        // A soft obstruction (tall flower, sapling, torch...) sits where the block
-        // goes: break it first, then place on a later tick.
+        // An obstruction sits where the block goes: break it first, then place
+        // on a later tick. In replace mode this can be any solid block, so use
+        // the proper tool for it.
         if (isFillObstruction(client, currentTarget)) {
+            if (fillReplace && autoTools && !switchToBestTool(client, currentTarget)) {
+                stopJob();
+                client.player.sendSystemMessage(Component.literal("§cAutoFill stopped: no safe tool for clearing. Lower /automine mindurability or add tools."));
+                return;
+            }
+            if (tickCooldown > 0) {
+                tickCooldown--;
+                return;
+            }
             mineBlockAt(client, currentTarget);
             return;
         }
@@ -1335,7 +1762,11 @@ public class DeltaUtilityModClient implements ClientModInitializer {
         return !state.getFluidState().isEmpty() && state.getCollisionShape(client.level, pos).isEmpty();
     }
 
-    /** Soft obstruction occupying a fill spot (flowers, saplings, torches...): instantly breakable, so mine it first. */
+    /**
+     * A block occupying a fill spot that must be mined before placing. Normally
+     * only soft, instantly-breakable blocks (flowers, saplings, torches...);
+     * in replace mode, any breakable block that isn't the fill block.
+     */
     private static boolean isFillObstruction(Minecraft client, BlockPos pos) {
         if (client == null || client.level == null || pos == null) {
             return false;
@@ -1343,6 +1774,9 @@ public class DeltaUtilityModClient implements ClientModInitializer {
         BlockState state = client.level.getBlockState(pos);
         if (state.isAir() || state.is(fillBlock) || state.canBeReplaced()) {
             return false;
+        }
+        if (fillReplace) {
+            return isBreakable(client, pos);
         }
         return state.getDestroySpeed(client.level, pos) == 0.0F;
     }
@@ -1511,7 +1945,8 @@ public class DeltaUtilityModClient implements ClientModInitializer {
         return false;
     }
 
-    private static boolean isMineable(Minecraft client, BlockPos pos) {
+    /** Base check: the block physically can and may be broken (ignores the target filter). */
+    private static boolean isBreakable(Minecraft client, BlockPos pos) {
         if (client == null || client.level == null) {
             return false;
         }
@@ -1528,6 +1963,19 @@ public class DeltaUtilityModClient implements ClientModInitializer {
             return false;
         }
         return !lavaSafety || !isLavaAdjacent(client, pos);
+    }
+
+    /** Job-target check: breakable AND allowed by the block filter. */
+    private static boolean isMineable(Minecraft client, BlockPos pos) {
+        return isBreakable(client, pos) && matchesFilter(client, pos);
+    }
+
+    private static boolean matchesFilter(Minecraft client, BlockPos pos) {
+        if (filterBlocks.isEmpty()) {
+            return true;
+        }
+        boolean inSet = filterBlocks.contains(client.level.getBlockState(pos).getBlock());
+        return filterInclude == inSet;
     }
 
     /** Like isMineable but ignoring lava safety; used to count skipped blocks. */
@@ -1556,7 +2004,8 @@ public class DeltaUtilityModClient implements ClientModInitializer {
         forEachSelectionPos(pos -> {
             if (isMineable(client, pos)) {
                 queue.add(pos);
-            } else if (lavaSafety && isMineableIgnoringLava(client, pos) && isLavaAdjacent(client, pos)) {
+            } else if (lavaSafety && matchesFilter(client, pos)
+                    && isMineableIgnoringLava(client, pos) && isLavaAdjacent(client, pos)) {
                 lavaSkippedCount++;
             }
         }, true);
@@ -1866,6 +2315,24 @@ public class DeltaUtilityModClient implements ClientModInitializer {
         saveSettings();
     }
 
+    public static boolean isAutoTorchEnabled() {
+        return autoTorch;
+    }
+
+    public static void setAutoTorchEnabled(boolean enabled) {
+        autoTorch = enabled;
+        saveSettings();
+    }
+
+    public static boolean isHudEnabled() {
+        return hudEnabled;
+    }
+
+    public static void setHudEnabled(boolean enabled) {
+        hudEnabled = enabled;
+        saveSettings();
+    }
+
     // ------------------------------------------------------------------
     // Settings persistence
     // ------------------------------------------------------------------
@@ -1890,6 +2357,8 @@ public class DeltaUtilityModClient implements ClientModInitializer {
             delayTicks = readInt(properties, "delayTicks", delayTicks, 1, 20);
             minToolDurability = readInt(properties, "minToolDurability", minToolDurability, 1, 250);
             pauseHealth = readInt(properties, "pauseHealth", pauseHealth, 0, 19);
+            autoTorch = readBoolean(properties, "autoTorch", autoTorch);
+            hudEnabled = readBoolean(properties, "hudEnabled", hudEnabled);
         } catch (Exception e) {
             LOGGER.warn("Failed to load Delta Utilities settings, rewriting defaults", e);
             saveSettings();
@@ -1911,6 +2380,8 @@ public class DeltaUtilityModClient implements ClientModInitializer {
             properties.setProperty("delayTicks", Integer.toString(delayTicks));
             properties.setProperty("minToolDurability", Integer.toString(minToolDurability));
             properties.setProperty("pauseHealth", Integer.toString(pauseHealth));
+            properties.setProperty("autoTorch", Boolean.toString(autoTorch));
+            properties.setProperty("hudEnabled", Boolean.toString(hudEnabled));
             try (OutputStream output = Files.newOutputStream(CONFIG_PATH)) {
                 properties.store(output, "Delta Utilities settings");
             }
@@ -2053,6 +2524,11 @@ public class DeltaUtilityModClient implements ClientModInitializer {
         taskStartedAtMillis = 0L;
         lowHealthTriggered = false;
         wasInventoryFull = false;
+        minePhase = MinePhase.WORK;
+        phaseTicks = 0;
+        depositClickCooldown = 0;
+        torchCooldown = 0;
+        fillReplace = false;
         resetPath();
         releaseMovementKeys(Minecraft.getInstance());
     }

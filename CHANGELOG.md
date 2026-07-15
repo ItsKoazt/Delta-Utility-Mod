@@ -1,3 +1,24 @@
+Delta Utility Mod v1.2.0
+This update makes AutoMine truly autonomous: it can now empty its own inventory into a chest, collect its drops, mine only the blocks you want, and light the area as it goes.
+
+New Features
+
+* Added chest depositing: look at a chest and run `/automine chest`. When the inventory fills up, the bot walks to the chest, deposits everything except tools, food, and torches, and goes back to mining. If the chest fills up or disappears, it pauses and tells you.
+* Added a drop collection sweep: when the area is fully mined, the bot walks around collecting leftover item drops before finishing.
+* Added a block filter: `/automine filter add <block>`, `remove`, `list`, `clear`, and `mode include|exclude`. Include mode mines only the listed blocks (ore-only mining); exclude mode mines everything except them.
+* Added a status HUD above the hotbar showing the current phase, blocks left, progress, and ETA. Toggle with `/automine hud` or in the config screen.
+* Added torch placement (off by default): places torches from your inventory while mining when light gets low. Toggle with `/automine torch` or in the config screen.
+* Added AutoFill replace mode: `/autofill start <block> replace` also mines out existing blocks, turning fill into a full "set this area to X" operation. Normal fill still never touches solid blocks.
+* Added falling block awareness: the bot sidesteps when gravel or sand hangs unsupported above its head, and pathfinding avoids standing under floating gravel.
+
+Fixes and Improvements
+
+* Release builds now derive the mod version from the git tag, so the jar version can never drift from the published version.
+* Path clearing now ignores the block filter, so filtered-out blocks can still be tunneled through to reach targets.
+* The AutoMine start message now notes when a block filter is active.
+
+---
+
 Delta Utility Mod v1.1.0
 This update rewrites how the mod moves through the world, makes AutoFill work in far more situations, and gives the whole mod a cleaner identity and settings screen.
 

@@ -26,7 +26,12 @@ That's it. The particle outline shows your selection, and it clears itself when 
 - 🎒 **Inventory-full protection** — pauses mining when you have no free slot, so drops don't despawn on the ground
 - 🍖 **Auto eat** — eats from hotbar or inventory when hunger gets low, holding right-click like a player would
 - ⌨️ **Keybinds** — set corners, start/pause, and stop from rebindable hotkeys (see Controls)
-- 📊 **Progress tracking** — blocks left, percent done, and a live ETA
+- 📦 **Chest depositing** — set a chest once; when the inventory fills, the bot walks over, deposits its loot (keeping tools, food, and torches), and resumes mining
+- ✨ **Drop sweep** — collects leftover item drops in the area before calling a job done
+- 🔍 **Block filter** — include/exclude lists for ore-only mining or protecting specific blocks
+- 🕯️ **Torch placement** (opt-in) — lights the area from your torch supply as it mines
+- ⚠️ **Falling-block awareness** — sidesteps unsupported gravel/sand overhead
+- 📊 **Status HUD** — phase, blocks left, percent done, and live ETA above the hotbar
 
 ## How It Behaves
 
@@ -46,7 +51,10 @@ That's it. The particle outline shows your selection, and it clears itself when 
 | `/automine start` / `stop` / `pause` / `resume` | Control mining |
 | `/automine status` | Blocks left, progress %, ETA |
 | `/automine reset` | Stop and clear the selection |
+| `/automine chest` / `chest clear` | Set or clear the deposit chest (look at a chest first) |
+| `/automine filter add\|remove <block>` / `mode` / `list` / `clear` | Choose which blocks get mined |
 | `/autofill start <block>` | Fill the selection (e.g. `dirt` or `minecraft:dirt`) |
+| `/autofill start <block> replace` | Fill and mine out existing blocks (full area conversion) |
 | `/autofill stop` / `pause` / `resume` / `status` / `reset` | Control filling |
 | `/delta outline on` / `off` | Toggle the selection outline |
 | `/delta help` | Full command list in chat |
@@ -64,6 +72,8 @@ That's it. The particle outline shows your selection, and it clears itself when 
 | `/automine hunger <1-19>` | Hunger level that triggers eating (default 14) |
 | `/automine health <0-19>` | Health level that pauses the job (default 6, 0 = off) |
 | `/automine lavasafety <true\|false>` | Skip lava-adjacent blocks (default on) |
+| `/automine torch <true\|false>` | Auto torch placement (default off) |
+| `/automine hud <true\|false>` | Status HUD above the hotbar (default on) |
 | `/automine mindurability <1-250>` | Minimum tool durability to keep (default 25) |
 
 ## Mod Menu

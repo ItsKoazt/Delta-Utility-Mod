@@ -3,6 +3,7 @@ package com.delta.utilitymod;
 import net.minecraft.client.Minecraft;
 import net.minecraft.core.BlockPos;
 import net.minecraft.tags.FluidTags;
+import net.minecraft.world.level.block.FallingBlock;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.Vec3;
 
@@ -279,8 +280,14 @@ final class DeltaPathfinder {
         return !state.getCollisionShape(client.level, pos).isEmpty();
     }
 
-    /** A position the player can stand in: feet and head clear, solid ground below. */
+    /**
+     * A position the player can stand in: feet and head clear, solid ground below,
+     * and no gravel/sand hovering directly above the head space.
+     */
     static boolean standable(Minecraft client, BlockPos feet) {
-        return passable(client, feet) && passable(client, feet.above()) && solid(client, feet.below());
+        if (!passable(client, feet) || !passable(client, feet.above()) || !solid(client, feet.below())) {
+            return false;
+        }
+        return !(client.level.getBlockState(feet.above(2)).getBlock() instanceof FallingBlock);
     }
 }

@@ -34,6 +34,8 @@ public final class DeltaUtilityModMenu implements ModMenuApi {
         private boolean autoTools;
         private boolean autoEat;
         private boolean lavaSafety;
+        private boolean autoTorch;
+        private boolean hud;
         private int pauseHealth;
         private int hunger;
         private int miningRange;
@@ -61,6 +63,8 @@ public final class DeltaUtilityModMenu implements ModMenuApi {
             autoTools = DeltaUtilityModClient.isAutoToolsEnabled();
             autoEat = DeltaUtilityModClient.isAutoEatEnabled();
             lavaSafety = DeltaUtilityModClient.isLavaSafetyEnabled();
+            autoTorch = DeltaUtilityModClient.isAutoTorchEnabled();
+            hud = DeltaUtilityModClient.isHudEnabled();
             pauseHealth = DeltaUtilityModClient.getPauseHealth();
             hunger = DeltaUtilityModClient.getHungerThreshold();
             miningRange = DeltaUtilityModClient.getMiningRange();
@@ -74,7 +78,7 @@ public final class DeltaUtilityModMenu implements ModMenuApi {
             int center = this.width / 2;
             leftX = center - COLUMN_WIDTH - 5;
             rightX = center + 5;
-            contentTop = Math.max(22, this.height / 2 - 112);
+            contentTop = Math.max(20, this.height / 2 - 124);
 
             int y = contentTop;
 
@@ -93,6 +97,13 @@ public final class DeltaUtilityModMenu implements ModMenuApi {
             addSlider(rightX, y, "Eat At Hunger", 1, 19, hunger,
                     "Hunger level (out of 20) that triggers auto eating.",
                     value -> hunger = value);
+            y += ROW_GAP;
+            addToggle(leftX, y, "Auto Torch", autoTorch,
+                    "Places torches from your inventory while mining when light gets low.",
+                    value -> autoTorch = value);
+            addToggle(rightX, y, "Status HUD", hud,
+                    "Shows job progress above the hotbar while a task runs.",
+                    value -> hud = value);
             y += SECTION_GAP;
 
             miningHeaderY = y;
@@ -143,6 +154,8 @@ public final class DeltaUtilityModMenu implements ModMenuApi {
                         autoTools = true;
                         autoEat = true;
                         lavaSafety = true;
+                        autoTorch = false;
+                        hud = true;
                         pauseHealth = 6;
                         hunger = 14;
                         miningRange = 5;
@@ -211,6 +224,8 @@ public final class DeltaUtilityModMenu implements ModMenuApi {
             DeltaUtilityModClient.setAutoToolsEnabled(autoTools);
             DeltaUtilityModClient.setAutoEatEnabled(autoEat);
             DeltaUtilityModClient.setLavaSafetyEnabled(lavaSafety);
+            DeltaUtilityModClient.setAutoTorchEnabled(autoTorch);
+            DeltaUtilityModClient.setHudEnabled(hud);
             DeltaUtilityModClient.setPauseHealth(pauseHealth);
             DeltaUtilityModClient.setHungerThreshold(hunger);
             DeltaUtilityModClient.setMiningRange(miningRange);

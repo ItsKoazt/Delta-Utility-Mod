@@ -23,7 +23,9 @@ jobs:
           java-version: 25
 
       - name: Build
-        run: ./gradlew build
+        # Derive the mod version from the tag (v1.2.0 -> 1.2.0) so the jar's
+        # internal version can never drift from the released version.
+        run: ./gradlew build -Pmod_version=${GITHUB_REF_NAME#v}
 
       - name: Publish to Modrinth and GitHub
         uses: Kir-Antipov/mc-publish@v3.3
