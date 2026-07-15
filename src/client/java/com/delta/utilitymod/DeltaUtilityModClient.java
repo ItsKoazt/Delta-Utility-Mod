@@ -107,6 +107,19 @@ public class DeltaUtilityModClient implements ClientModInitializer {
     private static double sweepBestDistance = Double.MAX_VALUE;
     private static final Set<Integer> sweepSkippedDrops = new HashSet<>();
 
+    // Camera control
+    private static final float TURN_SPEED_WORK = 11.0F;  // deg/tick while mining/placing
+    private static final float TURN_SPEED_WALK = 14.0F;  // deg/tick while walking
+    private static final float AIM_THRESHOLD_DEG = 30.0F;
+    private static float yawVelocity = 0.0F;
+    private static float pitchVelocity = 0.0F;
+    private static int lastFaceTick = Integer.MIN_VALUE;
+    private static float expectedYaw = Float.NaN;
+    private static float expectedPitch = Float.NaN;
+    private static int cameraYieldTicks = 0;
+    private static BlockPos lastAimTarget = null;
+    private static int aimTicks = 0;
+
     // Settings (persisted)
     private static boolean selectionOutlineEnabled = true;
     private static boolean autoMove = true;
@@ -535,6 +548,7 @@ public class DeltaUtilityModClient implements ClientModInitializer {
         paused = true;
         eatTicks = 0;
         wasEating = false;
+        resetCameraState();
         releaseMovementKeys(Minecraft.getInstance());
     }
 
@@ -840,7 +854,12 @@ public class DeltaUtilityModClient implements ClientModInitializer {
         releaseMovementKeys(client);
         stuckTicks = 0;
         resetPath();
-        faceSmooth(client, centerOf(currentTarget), 11.0F);
+        faceSmooth(client, centerOf(currentTarget), TURN_SPEED_WORK);
+
+        // Look at the block before starting to break it, like a player would.
+        if (!currentTarget.equals(lastBreakTarget) && needsAim(client, currentTarget, 8)) {
+            return;
+        }
 
         if (autoTools && !switchToBestTool(client, currentTarget)) {
             stopJob();
@@ -936,7 +955,7 @@ public class DeltaUtilityModClient implements ClientModInitializer {
 
         releaseMovementKeys(client);
         resetPath();
-        faceSmooth(client, centerOf(depositChest), 11.0F);
+        faceSmooth(client, centerOf(depositChest), TURN_SPEED_WORK);
 
         if (client.player.containerMenu.containerId == 0) {
             if (phaseTicks % 10 == 1) {
@@ -1152,6 +1171,9 @@ public class DeltaUtilityModClient implements ClientModInitializer {
             if (lastMinedPos != null && manhattan(pos, lastMinedPos) <= 2) {
                 score -= 8.0D;
             }
+            // Prefer blocks near the current view direction so the camera sweeps
+            // across the wall instead of ping-ponging between far-apart targets.
+            score += angularErrorTo(client, centerOf(pos)) * 0.12D;
             if (pos.equals(support)) {
                 score += 300.0D;
             }
@@ -1258,7 +1280,10 @@ public class DeltaUtilityModClient implements ClientModInitializer {
         if (clearBlock != null) {
             if (withinRange(client, clearBlock, maxRange)) {
                 releaseMovementKeys(client);
-                faceSmooth(client, centerOf(clearBlock), 11.0F);
+                faceSmooth(client, centerOf(clearBlock), TURN_SPEED_WORK);
+                if (!clearBlock.equals(lastBreakTarget) && needsAim(client, clearBlock, 6)) {
+                    return true;
+                }
                 if (autoTools) {
                     switchToBestTool(client, clearBlock);
                 }
@@ -1330,7 +1355,13 @@ public class DeltaUtilityModClient implements ClientModInitializer {
     private static void walkToward(Minecraft client, DeltaPathfinder.Step step) {
         Vec3 waypoint = new Vec3(step.feet.getX() + 0.5D, step.feet.getY() + 0.9D, step.feet.getZ() + 0.5D);
         Vec3 playerPos = client.player.position();
-        faceSmooth(client, waypoint, 14.0F);
+
+        // Steer (yaw) toward the immediate waypoint, but keep the eyes (pitch)
+        // on a point a few waypoints ahead so the camera looks down the path
+        // instead of nodding at each waypoint underfoot.
+        DeltaPathfinder.Step ahead = path.get(Math.min(path.size() - 1, pathIndex + 3));
+        Vec3 lookAhead = new Vec3(ahead.feet.getX() + 0.5D, ahead.feet.getY() + 1.55D, ahead.feet.getZ() + 0.5D);
+        faceAngles(client, yawToward(client, waypoint), pitchToward(client, lookAhead), TURN_SPEED_WALK);
 
         double dx = waypoint.x - playerPos.x;
         double dz = waypoint.z - playerPos.z;
@@ -1392,7 +1423,7 @@ public class DeltaUtilityModClient implements ClientModInitializer {
         }
         Vec3 targetCenter = centerOf(target);
         Vec3 playerPos = client.player.position();
-        faceSmooth(client, targetCenter, 14.0F);
+        faceSmooth(client, targetCenter, TURN_SPEED_WALK);
 
         double dx = targetCenter.x - playerPos.x;
         double dz = targetCenter.z - playerPos.z;
@@ -1717,12 +1748,15 @@ public class DeltaUtilityModClient implements ClientModInitializer {
         releaseMovementKeys(client);
         stuckTicks = 0;
         resetPath();
-        faceSmooth(client, centerOf(currentTarget), 11.0F);
+        faceSmooth(client, centerOf(currentTarget), TURN_SPEED_WORK);
 
         // An obstruction sits where the block goes: break it first, then place
         // on a later tick. In replace mode this can be any solid block, so use
         // the proper tool for it.
         if (isFillObstruction(client, currentTarget)) {
+            if (!currentTarget.equals(lastBreakTarget) && needsAim(client, currentTarget, 6)) {
+                return;
+            }
             if (fillReplace && autoTools && !switchToBestTool(client, currentTarget)) {
                 stopJob();
                 client.player.sendSystemMessage(Component.literal("§cAutoFill stopped: no safe tool for clearing. Lower /automine mindurability or add tools."));
@@ -1754,6 +1788,9 @@ public class DeltaUtilityModClient implements ClientModInitializer {
         if (placeCooldown > 0) {
             return;
         }
+        if (needsAim(client, currentTarget, 6)) {
+            return;
+        }
 
         BlockHitResult hit = findPlacementHit(client, currentTarget);
         if (hit == null) {
@@ -1776,7 +1813,7 @@ public class DeltaUtilityModClient implements ClientModInitializer {
         }
         Vec3 direction = flat.normalize();
         Vec3 lookPoint = client.player.position().add(direction.scale(2.0D)).add(0.0D, 1.0D, 0.0D);
-        faceSmooth(client, lookPoint, 14.0F);
+        faceSmooth(client, lookPoint, TURN_SPEED_WALK);
         client.options.keyUp.setDown(true);
         client.options.keySprint.setDown(false);
 
@@ -2135,40 +2172,124 @@ public class DeltaUtilityModClient implements ClientModInitializer {
         return new Vec3(pos.getX() + 0.5D, pos.getY() + 0.5D, pos.getZ() + 0.5D);
     }
 
-    /**
-     * Rotates the camera toward the target with proportional easing: fast while
-     * far off-target, decelerating as it lines up. maxStep caps degrees per tick.
-     * The camera renderer interpolates between ticks, so this looks fluid.
-     */
+    /** Rotates the camera toward a world position with eased, human-looking motion. */
     private static void faceSmooth(Minecraft client, Vec3 target, float maxStep) {
         if (client == null || client.player == null) {
             return;
         }
-
-        Vec3 eye = client.player.getEyePosition();
-        double dx = target.x - eye.x;
-        double dy = target.y - eye.y;
-        double dz = target.z - eye.z;
-        double horizontal = Math.sqrt(dx * dx + dz * dz);
-
-        float desiredYaw = (float) (Math.toDegrees(Math.atan2(dz, dx)) - 90.0D);
-        float desiredPitch = (float) (-Math.toDegrees(Math.atan2(dy, horizontal)));
-
-        float yawDelta = Mth.wrapDegrees(desiredYaw - client.player.getYRot());
-        float pitchDelta = Mth.wrapDegrees(desiredPitch - client.player.getXRot());
-
-        client.player.setYRot(client.player.getYRot() + easedStep(yawDelta, maxStep));
-        client.player.setXRot(Mth.clamp(client.player.getXRot() + easedStep(pitchDelta, maxStep), -90.0F, 90.0F));
+        faceAngles(client, yawToward(client, target), pitchToward(client, target), maxStep);
     }
 
-    /** Eased rotation step: 35% of the remaining angle, at least 2°, at most maxStep. */
-    private static float easedStep(float delta, float maxStep) {
-        float magnitude = Math.abs(delta);
-        if (magnitude < 0.25F) {
-            return delta; // close enough: settle exactly on target
+    /**
+     * Camera core. Velocity-based easing: the turn rate accelerates toward
+     * 40% of the remaining angle (capped at maxStep) and never overshoots,
+     * giving an ease-in / ease-out arc with no velocity jumps between ticks.
+     * The renderer interpolates rotation across each tick, so the result is
+     * fluid at any framerate.
+     *
+     * If the player's rotation isn't where we left it, the user moved their
+     * mouse: the bot yields the camera entirely for a moment instead of
+     * fighting them for it.
+     */
+    private static void faceAngles(Minecraft client, float desiredYaw, float desiredPitch, float maxStep) {
+        int now = client.player.tickCount;
+        if (now - lastFaceTick > 2) {
+            // We haven't controlled the camera recently: start from rest.
+            yawVelocity = 0.0F;
+            pitchVelocity = 0.0F;
+            expectedYaw = Float.NaN;
         }
-        float step = Math.min(maxStep, Math.max(2.0F, magnitude * 0.35F));
-        return Math.min(step, magnitude) * Math.signum(delta);
+        lastFaceTick = now;
+
+        if (!Float.isNaN(expectedYaw)) {
+            float userMoved = Math.abs(Mth.wrapDegrees(client.player.getYRot() - expectedYaw))
+                    + Math.abs(client.player.getXRot() - expectedPitch);
+            if (userMoved > 2.5F) {
+                cameraYieldTicks = 12;
+                yawVelocity = 0.0F;
+                pitchVelocity = 0.0F;
+            }
+        }
+        if (cameraYieldTicks > 0) {
+            cameraYieldTicks--;
+            expectedYaw = Float.NaN;
+            return;
+        }
+
+        float yawError = Mth.wrapDegrees(desiredYaw - client.player.getYRot());
+        float pitchError = Mth.wrapDegrees(desiredPitch - client.player.getXRot());
+
+        yawVelocity = approachVelocity(yawVelocity, yawError, maxStep);
+        pitchVelocity = approachVelocity(pitchVelocity, pitchError, maxStep);
+
+        float newYaw = client.player.getYRot() + yawVelocity;
+        float newPitch = Mth.clamp(client.player.getXRot() + pitchVelocity, -90.0F, 90.0F);
+        client.player.setYRot(newYaw);
+        client.player.setXRot(newPitch);
+        expectedYaw = newYaw;
+        expectedPitch = newPitch;
+    }
+
+    private static float approachVelocity(float velocity, float error, float maxStep) {
+        if (Math.abs(error) < 0.15F) {
+            return error; // settle exactly
+        }
+        float targetVelocity = Mth.clamp(error * 0.4F, -maxStep, maxStep);
+        velocity += (targetVelocity - velocity) * 0.5F;
+        if (Math.abs(velocity) > Math.abs(error)) {
+            velocity = error; // never swing past the target
+        }
+        return velocity;
+    }
+
+    private static float yawToward(Minecraft client, Vec3 target) {
+        Vec3 eye = client.player.getEyePosition();
+        return (float) (Math.toDegrees(Math.atan2(target.z - eye.z, target.x - eye.x)) - 90.0D);
+    }
+
+    private static float pitchToward(Minecraft client, Vec3 target) {
+        Vec3 eye = client.player.getEyePosition();
+        double dx = target.x - eye.x;
+        double dz = target.z - eye.z;
+        double horizontal = Math.sqrt(dx * dx + dz * dz);
+        return (float) (-Math.toDegrees(Math.atan2(target.y - eye.y, horizontal)));
+    }
+
+    /** How far (degrees) the current view is from centering the given point. */
+    private static float angularErrorTo(Minecraft client, Vec3 target) {
+        float yawError = Math.abs(Mth.wrapDegrees(yawToward(client, target) - client.player.getYRot()));
+        float pitchError = Math.abs(Mth.wrapDegrees(pitchToward(client, target) - client.player.getXRot()));
+        return Math.max(yawError, pitchError);
+    }
+
+    /**
+     * Aim gate: true while the camera should finish turning toward the block
+     * before acting on it. Bounded so a gate can never stall the job, and
+     * disabled while the user has the camera.
+     */
+    private static boolean needsAim(Minecraft client, BlockPos pos, int maxWaitTicks) {
+        if (!pos.equals(lastAimTarget)) {
+            lastAimTarget = pos.immutable();
+            aimTicks = 0;
+        }
+        if (cameraYieldTicks > 0) {
+            return false;
+        }
+        if (angularErrorTo(client, centerOf(pos)) <= AIM_THRESHOLD_DEG || aimTicks >= maxWaitTicks) {
+            return false;
+        }
+        aimTicks++;
+        return true;
+    }
+
+    private static void resetCameraState() {
+        yawVelocity = 0.0F;
+        pitchVelocity = 0.0F;
+        expectedYaw = Float.NaN;
+        expectedPitch = Float.NaN;
+        cameraYieldTicks = 0;
+        lastAimTarget = null;
+        aimTicks = 0;
     }
 
     private static Direction getHitDirection(Minecraft client, BlockPos pos) {
@@ -2646,6 +2767,7 @@ public class DeltaUtilityModClient implements ClientModInitializer {
         sweepNoProgressTicks = 0;
         sweepBestDistance = Double.MAX_VALUE;
         sweepSkippedDrops.clear();
+        resetCameraState();
         resetPath();
         releaseMovementKeys(Minecraft.getInstance());
     }
