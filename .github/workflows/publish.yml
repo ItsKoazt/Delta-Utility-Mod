@@ -26,9 +26,7 @@ jobs:
       - name: Publish to Modrinth
         uses: Kir-Antipov/mc-publish@v3.3
         with:
-          # Replace with your Modrinth project ID (Project Settings -> copy ID,
-          # or the 8-character code in your project URL).
-          modrinth-id: REPLACE_WITH_MODRINTH_PROJECT_ID
+          modrinth-id: kzlaVC0v
           modrinth-token: ${{ secrets.MODRINTH_TOKEN }}
           files: build/libs/Delta.jar
           name: Delta Utility Mod ${{ github.event.release.tag_name }}
