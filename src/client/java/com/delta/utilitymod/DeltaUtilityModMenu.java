@@ -109,7 +109,7 @@ public final class DeltaUtilityModMenu implements ModMenuApi {
                     "Places torches from your inventory while mining when light gets low.",
                     value -> autoTorch = value);
             addToggle(rightX, y, "Drop Sweep", sweep,
-                    "Collects leftover item drops in the area before finishing a mining job.",
+                    "Collects drops before finishing, and pauses (or deposits) when your inventory fills. Off = ignore drops and keep mining.",
                     value -> sweep = value);
             y += SECTION_GAP;
 

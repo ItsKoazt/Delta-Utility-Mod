@@ -13,7 +13,7 @@ Client-side Fabric utility mod for Minecraft 26.2: select an area, then let the 
 - **Auto eat** — eats from your hotbar or inventory when hunger drops below the threshold.
 - **Lava safety** (on by default) — skips blocks that touch lava so the bot never floods itself; skipped blocks are reported when the job finishes.
 - **Health safety** — pauses the job when your health drops to a configurable level (default 6/20), so it never mines on while you're dying. Set to 0 to disable.
-- **Inventory-full pause** — AutoMine pauses with a warning when your inventory has no free slot, so drops don't despawn on the ground.
+- **Inventory-full pause** — AutoMine pauses with a warning when your inventory has no free slot, so drops don't despawn. Tied to the Drop Sweep toggle: turn Drop Sweep off and the bot ignores drops and mines straight through without pausing.
 - **Keybinds** — set Pos1/Pos2 (default `[` / `]`), start/pause AutoMine (default `\`), and stop the current job, all rebindable under Controls.
 - **Chest depositing** — set a chest with `/automine chest`; when the inventory fills, the bot deposits everything (except tools, food, and torches) and resumes mining.
 - **Drop sweep** — collects leftover item drops in the area before finishing a mining job.

@@ -744,8 +744,16 @@ public class DeltaUtilityModClient implements ClientModInitializer {
         return false;
     }
 
-    /** When the inventory fills up: head to the deposit chest if one is set, otherwise pause. */
+    /**
+     * When the inventory fills up: head to the deposit chest if one is set,
+     * otherwise pause. Only active when the player cares about drops - with
+     * Drop Sweep off (and no chest configured), mining continues regardless.
+     */
     private static boolean checkInventoryFull(Minecraft client) {
+        if (!dropSweep && depositChest == null) {
+            wasInventoryFull = false;
+            return false;
+        }
         if (client.player.tickCount % 20 != 0) {
             return false;
         }
@@ -813,6 +821,19 @@ public class DeltaUtilityModClient implements ClientModInitializer {
             }
             if (currentTarget == null) {
                 if (dropSweep && findNearestDrop(client) != null) {
+                    if (isInventoryFullNow(client)) {
+                        // Can't pick anything up while full: deposit first if
+                        // possible, otherwise skip collecting entirely.
+                        if (depositChest != null) {
+                            minePhase = MinePhase.GOTO_CHEST;
+                            phaseTicks = 0;
+                            resetPath();
+                            client.player.sendSystemMessage(Component.literal("§bAutoMine: depositing before collecting drops."));
+                            return;
+                        }
+                        finishMineJob(client);
+                        return;
+                    }
                     minePhase = MinePhase.SWEEP;
                     phaseTicks = 0;
                     sweepTargetId = -1;
@@ -1034,7 +1055,18 @@ public class DeltaUtilityModClient implements ClientModInitializer {
     private static void tickSweep(Minecraft client) {
         phaseTicks++;
 
-        if (phaseTicks > 600 || !autoMove) {
+        if (phaseTicks > 600 || !autoMove || !dropSweep) {
+            finishMineJob(client);
+            return;
+        }
+        // Filled up mid-sweep: deposit and come back, or stop if we can't.
+        if (isInventoryFullNow(client)) {
+            if (depositChest != null) {
+                minePhase = MinePhase.GOTO_CHEST;
+                phaseTicks = 0;
+                resetPath();
+                return;
+            }
             finishMineJob(client);
             return;
         }
